@@ -47,6 +47,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
+
+GEMINI_API_KEY=AIzaSy_xxx
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 ## 4. Supabase Setup

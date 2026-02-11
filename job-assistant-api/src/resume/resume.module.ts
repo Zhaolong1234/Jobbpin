@@ -6,5 +6,6 @@ import { ResumeService } from './resume.service';
 @Module({
   controllers: [ResumeController],
   providers: [ResumeService],
+  exports: [ResumeService],
 })
 export class ResumeModule {}
