@@ -10,12 +10,14 @@ import {
 import { AppLoggerService } from '../common/logger/app-logger.service';
 import { ResumeRecord } from '../common/types/shared';
 import { ResumeService } from '../resume/resume.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 import { ChatDto } from './dto/chat.dto';
 
 @Injectable()
 export class AiService {
   constructor(
     private readonly resumeService: ResumeService,
+    private readonly subscriptionService: SubscriptionService,
     private readonly logger: AppLoggerService,
   ) {}
 
@@ -122,8 +124,67 @@ export class AiService {
     return '我已读取你的简历解析结果。你可以问我：1）如何提升面试命中率；2）如何改写某段经历；3）如何对齐特定岗位JD。';
   }
 
+  private isSubscriptionQuestion(message: string): boolean {
+    const lowered = message.toLowerCase();
+    const keywords = [
+      'subscription',
+      'billing',
+      'stripe',
+      'trial',
+      'weekly',
+      'monthly',
+      'yearly',
+      'price',
+      'plan',
+      '订阅',
+      '计费',
+      '价格',
+      '试用',
+      '周付',
+      '月付',
+      '年付',
+      '套餐',
+    ];
+    return keywords.some((word) => lowered.includes(word));
+  }
+
+  private buildSubscriptionReply(input: {
+    status: string;
+    plan: string;
+    currentPeriodEnd?: string;
+  }): string {
+    const weeklyPrice = 'A$5/week';
+    const monthlyPrice = 'A$19/month';
+    const yearlyPrice = 'A$200/year';
+    return [
+      '订阅规则如下：',
+      `1) Weekly：${weeklyPrice}，仅 Weekly 支持 7 天免费试用。`,
+      `2) Monthly：${monthlyPrice}，直接付费，无试用。`,
+      `3) Yearly：${yearlyPrice}，直接付费，无试用。`,
+      '4) 7 天试用只对“首次订阅用户”开放；如果用户有过订阅记录，则 trial not available。',
+      '',
+      `你当前状态：plan=${input.plan || 'free'}，status=${input.status || 'incomplete'}${
+        input.currentPeriodEnd ? `，currentPeriodEnd=${input.currentPeriodEnd}` : ''
+      }`,
+    ].join('\n');
+  }
+
   async chat(dto: ChatDto) {
-    const resume = await this.resumeService.getLatest(dto.userId);
+    const [resume, subscription] = await Promise.all([
+      this.resumeService.getLatest(dto.userId),
+      this.subscriptionService.getSubscription(dto.userId),
+    ]);
+
+    if (this.isSubscriptionQuestion(dto.message)) {
+      return {
+        reply: this.buildSubscriptionReply({
+          plan: subscription.plan,
+          status: subscription.status,
+          currentPeriodEnd: subscription.currentPeriodEnd,
+        }),
+      };
+    }
+
     const resumeContext = this.summarizeResumeForPrompt(resume);
 
     if (!this.geminiApiKey) {
@@ -137,10 +198,15 @@ export class AiService {
       .map((item) => `[${item.role}] ${item.content}`)
       .join('\n');
 
-    const prompt = `You are an AI career assistant for resume optimization.
+    const prompt = `You are an AI career assistant for resume optimization and product guidance.
 Default language: concise Chinese.
 If the user asks for score, provide score (0-100), weaknesses, and rewrite suggestions.
 Use the parsed resume as source of truth.
+If user asks subscription questions, answer with these exact rules:
+- Weekly: A$5/week, supports 7-day free trial only for first-time subscribers.
+- Monthly: A$19/month, no trial.
+- Yearly: A$200/year, no trial.
+- If subscribed before, trial is unavailable.
 
 Parsed Resume:
 ${resumeContext}

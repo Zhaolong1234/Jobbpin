@@ -1,4 +1,4 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
 export class CreateCheckoutSessionDto {
   @IsString()
@@ -16,4 +16,10 @@ export class CreateCheckoutSessionDto {
   @IsString()
   @MinLength(1)
   cancelUrl!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  trialDays?: number;
 }

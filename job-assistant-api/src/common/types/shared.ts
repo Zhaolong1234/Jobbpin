@@ -47,3 +47,37 @@ export interface SubscriptionRecord {
   stripeSubscriptionId?: string;
   currentPeriodEnd?: string;
 }
+
+export interface ProfileRecord {
+  userId: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  targetRole: string;
+  yearsExp: string;
+  country: string;
+  city: string;
+  linkedinUrl?: string;
+  portfolioUrl?: string;
+  allowLinkedinAnalysis: boolean;
+  employmentTypes: string[];
+  profileSkipped: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface OnboardingStateRecord {
+  userId: string;
+  currentStep: 1 | 2 | 3 | 4;
+  isCompleted: boolean;
+  profileSkipped: boolean;
+  updatedAt?: string;
+}
+
+export interface UserRecord {
+  clerkUserId: string;
+  email?: string;
+  onboardingCompletedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}

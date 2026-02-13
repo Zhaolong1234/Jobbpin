@@ -40,7 +40,35 @@ export interface ResumeRecord {
 }
 
 export interface SubscriptionRecord {
+  userId?: string;
   plan: string;
   status: SubscriptionStatus;
   currentPeriodEnd?: string;
+}
+
+export interface ProfileRecord {
+  userId: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  targetRole: string;
+  yearsExp: string;
+  country: string;
+  city: string;
+  linkedinUrl?: string;
+  portfolioUrl?: string;
+  allowLinkedinAnalysis: boolean;
+  employmentTypes: string[];
+  profileSkipped: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  isCompleted?: boolean;
+}
+
+export interface OnboardingStateRecord {
+  userId: string;
+  currentStep: 1 | 2 | 3 | 4;
+  isCompleted: boolean;
+  profileSkipped: boolean;
+  updatedAt?: string;
 }

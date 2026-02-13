@@ -6,7 +6,7 @@ Deployable full-stack baseline for:
 - Stripe subscription (test mode)
 - Supabase persistence
 
-Current stage skips Clerk authentication and uses `dev_user_id`.
+Current stage includes Clerk-based frontend auth (sign-in/sign-up + dashboard route protection).
 
 ## 1. Repository Structure
 
@@ -34,6 +34,8 @@ Current stage skips Clerk authentication and uses `dev_user_id`.
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
+CLERK_SECRET_KEY=sk_test_xxx
 ```
 
 ### 3.2 Backend (`job-assistant-api/.env`)
@@ -57,9 +59,27 @@ GEMINI_MODEL=gemini-2.5-flash
 Run SQL in `job-assistant-api/sql/init.sql` via Supabase SQL editor.
 
 Tables created:
+- `users`
 - `profiles`
 - `resumes`
 - `subscriptions`
+- `onboarding_states`
+
+`users` behavior:
+- Row is created/upserted only when onboarding is completed (`step=4` + `is_completed=true`)
+- Key: `clerk_user_id`
+- Stores: `email`, `onboarding_completed_at`, `created_at`, `updated_at`
+
+`profiles` now includes onboarding fields:
+- `first_name`, `last_name`, `country`
+- `linkedin_url`, `portfolio_url`, `allow_linkedin_analysis`
+- `employment_types` (jsonb array), `profile_skipped`
+- `updated_at` auto-update trigger
+
+`onboarding_states` now includes:
+- `current_step` (`1..4`)
+- `is_completed`
+- `profile_skipped`
 
 ## 5. Local Development
 
@@ -180,6 +200,16 @@ After Render deploy:
 ### Subscription
 - `GET /subscription/:userId`
 
+### Profile
+- `GET /profile/:userId`
+- `POST /profile`
+
+### Onboarding
+- `GET /onboarding/:userId`
+- `POST /onboarding/initialize`
+- `POST /onboarding/sync`
+- `POST /onboarding/step`
+
 ## 9. Common Troubleshooting
 
 1. `Only PDF files are supported`
@@ -195,26 +225,19 @@ After Render deploy:
 - Verify `SUPABASE_SERVICE_ROLE_KEY`.
 - Ensure SQL initialization script has been executed.
 
+5. `Could not find table 'public.onboarding_states' in the schema cache`
+- Your project ran an older SQL schema without onboarding table.
+- Re-run `job-assistant-api/sql/init.sql` or just run the incremental SQL in section 4.
+
 5. CORS error
 - Set backend `FRONTEND_URL` to exact frontend origin.
 
-## 10. Clerk Integration (Next Phase)
+## 10. Clerk Status
 
-Current stage uses `dev_user_id`. To integrate Clerk later:
+Implemented now:
+- `/sign-in` and `/sign-up` use Clerk components
+- `middleware.ts` protects `/dashboard*` routes
+- Dashboard/Resume/Billing pages use Clerk `user.id` as primary user identity
 
-1. Frontend env (Vercel):
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-
-2. Backend env:
-- `CLERK_SECRET_KEY`
-- `CLERK_JWT_ISSUER`
-
-3. Replacement steps:
-- Replace `dev_user_id` with Clerk `user.id` on frontend.
-- Add auth guard/middleware on backend to verify Clerk JWT.
-- Protect `/dashboard` and backend private endpoints.
-
-4. Main touch points:
-- `job-assistant/src/lib/config.ts` (`DEV_USER_ID`)
-- all frontend API calls currently sending static `userId`
-- backend controllers currently accepting `userId` from request
+Still next phase:
+- Backend-side Clerk JWT verification (currently backend still accepts `userId` from request payload/path)

@@ -23,6 +23,33 @@ export class BillingService {
 
   async createCheckoutSession(dto: CreateCheckoutSessionDto) {
     const stripe = this.getStripeClient();
+    const trialRequested = Boolean(dto.trialDays && dto.trialDays > 0);
+    if (trialRequested) {
+      const weeklyPriceId = process.env.STRIPE_WEEKLY_PRICE_ID;
+      if (!weeklyPriceId) {
+        throw new BadRequestException(
+          'STRIPE_WEEKLY_PRICE_ID is missing. Weekly trial cannot be used.',
+        );
+      }
+      if (dto.priceId !== weeklyPriceId) {
+        throw new BadRequestException(
+          'Trial is only available for the weekly plan.',
+        );
+      }
+
+      const existing = await this.subscriptionService.getSubscription(dto.userId);
+      const hasSubscribedBefore =
+        Boolean(existing.stripeSubscriptionId) ||
+        Boolean(existing.stripeCustomerId) ||
+        ['trialing', 'active', 'past_due', 'canceled'].includes(existing.status);
+
+      if (hasSubscribedBefore) {
+        throw new BadRequestException(
+          'Trial not available for users who already subscribed before.',
+        );
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       success_url: dto.successUrl,
@@ -33,6 +60,13 @@ export class BillingService {
           quantity: 1,
         },
       ],
+      subscription_data:
+        dto.trialDays && dto.trialDays > 0
+          ? {
+              trial_period_days: dto.trialDays,
+              metadata: { userId: dto.userId },
+            }
+          : undefined,
       client_reference_id: dto.userId,
       metadata: {
         userId: dto.userId,
