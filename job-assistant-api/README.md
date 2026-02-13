@@ -1,21 +1,61 @@
-# job-assistant-api (backend)
+# job-assistant-api
 
-NestJS backend with controller/service/module structure.
+NestJS backend for JobbPin AI MVP.
 
-For full setup and deployment instructions, use root documentation:
+Main capabilities:
+- onboarding state management
+- profile persistence
+- resume upload + parsing
+- Stripe checkout + webhook sync
+- subscription status query
+- AI chat endpoint
 
-- `../README.md`
-
-## Quick local run
+## 1. Quick Start
 
 ```bash
 npm install
 npm run start:dev
 ```
 
-Create `job-assistant-api/.env` based on `.env.example` before running Stripe or Supabase integrations.
+Build check:
 
-## Current controllers
+```bash
+npm run build
+```
+
+## 2. Environment
+
+Create `.env` from `.env.example`.
+
+Required for core features:
+- `PORT`
+- `FRONTEND_URL`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+
+Optional:
+- `STRIPE_WEEKLY_PRICE_ID` (weekly trial logic helper)
+- `GEMINI_API_KEY`, `GEMINI_MODEL` (AI chat)
+- `CLERK_SECRET_KEY` (future backend JWT verification phase)
+
+## 3. Database Schema
+
+Run:
+- `sql/init.sql`
+
+Tables used:
+- `profiles`
+- `resumes`
+- `subscriptions`
+- `onboarding_states`
+- `users`
+
+Important rule:
+- `users` is created/upserted only when onboarding is completed (`step=4`, `isCompleted=true`).
+
+## 4. HTTP Endpoints
 
 - `GET /health`
 - `POST /resume/upload`
@@ -31,7 +71,10 @@ Create `job-assistant-api/.env` based on `.env.example` before running Stripe or
 - `POST /onboarding/step`
 - `POST /ai/chat`
 
-## users table lifecycle
+## 5. Notes
 
-- `public.users` is written only when onboarding is completed (`step=4`, `isCompleted=true`).
-- Identity key is `clerk_user_id` (or dev fallback id when Clerk is disabled).
+- Current API still accepts `userId` from request path/body.
+- Frontend uses Clerk identity and sends user id to backend.
+- Next hardening step: verify Clerk JWT in backend and derive user id from token (`sub`).
+
+For complete full-stack deployment instructions, see root `../README.md`.

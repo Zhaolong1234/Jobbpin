@@ -1,19 +1,19 @@
-# Job Assistant MVP
+# JobbPin AI MVP
 
-Deployable full-stack baseline for:
-- resume upload + structured parsing
-- onboarding progress in dashboard
-- Stripe subscription (test mode)
+Full-stack MVP for:
+- Clerk auth (`sign-in`, `sign-up`, Google login)
+- 4-step onboarding flow
+- resume upload + parsing
+- Stripe subscriptions (weekly/monthly/yearly)
+- AI chat assistant (Gemini)
 - Supabase persistence
-
-Current stage includes Clerk-based frontend auth (sign-in/sign-up + dashboard route protection).
 
 ## 1. Repository Structure
 
 ```text
 .
 ├── job-assistant/          # Next.js 14 frontend
-├── job-assistant-api/      # NestJS backend (controller/service/module)
+├── job-assistant-api/      # NestJS backend
 ├── PROMPTS.md
 └── README.md
 ```
@@ -22,10 +22,10 @@ Current stage includes Clerk-based frontend auth (sign-in/sign-up + dashboard ro
 
 - Node.js `18.18+`
 - npm `9+`
-- Stripe account (Test mode)
 - Supabase project
-- Vercel account (frontend deploy)
-- Render account (backend deploy)
+- Stripe account (Test mode)
+- Clerk application
+- (Optional) Gemini API key for AI chat
 
 ## 3. Environment Variables
 
@@ -33,7 +33,12 @@ Current stage includes Clerk-based frontend auth (sign-in/sign-up + dashboard ro
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
-NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx
+
+NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx                # legacy fallback
+NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY=price_xxx_weekly
+NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY=price_xxx_monthly
+NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY=price_xxx_yearly
+
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
 CLERK_SECRET_KEY=sk_test_xxx
 ```
@@ -49,64 +54,55 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
+STRIPE_WEEKLY_PRICE_ID=price_xxx_weekly
 
 GEMINI_API_KEY=AIzaSy_xxx
 GEMINI_MODEL=gemini-2.5-flash
+
+# optional: future backend JWT verification
+CLERK_SECRET_KEY=sk_test_xxx
 ```
 
-## 4. Supabase Setup
+## 4. Database Setup (Supabase)
 
-Run SQL in `job-assistant-api/sql/init.sql` via Supabase SQL editor.
+Run `job-assistant-api/sql/init.sql` in Supabase SQL Editor.
 
-Tables created:
-- `users`
+Creates/updates tables:
 - `profiles`
 - `resumes`
 - `subscriptions`
 - `onboarding_states`
+- `users`
 
-`users` behavior:
-- Row is created/upserted only when onboarding is completed (`step=4` + `is_completed=true`)
-- Key: `clerk_user_id`
-- Stores: `email`, `onboarding_completed_at`, `created_at`, `updated_at`
-
-`profiles` now includes onboarding fields:
-- `first_name`, `last_name`, `country`
-- `linkedin_url`, `portfolio_url`, `allow_linkedin_analysis`
-- `employment_types` (jsonb array), `profile_skipped`
-- `updated_at` auto-update trigger
-
-`onboarding_states` now includes:
-- `current_step` (`1..4`)
-- `is_completed`
-- `profile_skipped`
+Important behavior:
+- `users` row is created/upserted only when onboarding is completed (`step=4` + `is_completed=true`).
+- `users.clerk_user_id` is unique identity key.
+- `profiles` includes onboarding fields: `first_name`, `last_name`, `country`, `city`, `linkedin_url`, `portfolio_url`, `allow_linkedin_analysis`, `employment_types`, `profile_skipped`.
+- `onboarding_states.current_step` supports `1..4`.
 
 ## 5. Local Development
 
-## 5.1 Install dependencies
+### 5.1 Install
 
 ```bash
-cd job-assistant
-npm install
-
-cd ../job-assistant-api
-npm install
+cd job-assistant && npm install
+cd ../job-assistant-api && npm install
 ```
 
-## 5.2 Start backend
+### 5.2 Start backend
 
 ```bash
 cd job-assistant-api
 npm run start:dev
 ```
 
-Backend health check:
+Health check:
 
 ```bash
 curl http://localhost:4000/health
 ```
 
-## 5.3 Start frontend
+### 5.3 Start frontend
 
 ```bash
 cd job-assistant
@@ -114,130 +110,114 @@ npm run dev
 ```
 
 Open:
-- frontend: `http://localhost:3000`
-- dashboard: `http://localhost:3000/dashboard`
+- `http://localhost:3000`
+- `http://localhost:3000/sign-in`
+- `http://localhost:3000/onboarding`
+- `http://localhost:3000/dashboard`
 
-## 6. Stripe Test Mode Setup
+## 6. Auth + Onboarding Flow
 
-1. In Stripe Dashboard (Test mode), create:
-- Product
-- Monthly recurring Price
+1. User signs in/signs up (email/password or Google via Clerk).
+2. Redirect to `/onboarding`.
+3. Complete 4 steps:
+- Step 1 target role
+- Step 2 profile basics
+- Step 3 links (optional)
+- Step 4 employment type
+4. On completion:
+- onboarding marked complete
+- `users` table upserted
+- redirect to dashboard
 
-2. Put Price ID into frontend:
-- `NEXT_PUBLIC_STRIPE_PRICE_ID`
+## 7. Stripe Subscription Rules
 
-3. Configure webhook endpoint:
-- Local: use Stripe CLI forwarding to `http://localhost:4000/billing/webhook`
-- Cloud: use Render URL `https://<render-service>/billing/webhook`
+Plans:
+- Weekly
+- Monthly
+- Yearly
 
-4. Add webhook signing secret to backend:
-- `STRIPE_WEBHOOK_SECRET`
+Trial rule:
+- Only weekly supports free trial logic.
+- Trial applies to first-time subscription only.
+- If user subscribed before, no trial.
 
-Test card:
-- `4242 4242 4242 4242`
-- any future date / any CVC / any ZIP
+Webhook endpoint:
+- `POST /billing/webhook`
 
-## 7. Deployment
+Enable Stripe events:
+- `checkout.session.completed`
+- `customer.subscription.updated`
+- `customer.subscription.deleted`
 
-## 7.1 Frontend on Vercel
+## 8. Deploy
 
-1. Import repository.
-2. Set root directory: `job-assistant`
-3. Build command: default (`next build`)
-4. Add env:
+### 8.1 Frontend (Vercel)
+
+Root directory: `job-assistant`
+
+Required env:
 - `NEXT_PUBLIC_API_BASE_URL=https://<render-backend-domain>`
-- `NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx`
-5. Deploy.
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- `CLERK_SECRET_KEY`
+- `NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY`
+- `NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY`
+- `NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY`
 
-## 7.2 Backend on Render
+### 8.2 Backend (Render)
 
-1. Create a new Web Service from repo.
-2. Root directory: `job-assistant-api`
-3. Build command:
+Root directory: `job-assistant-api`
+
+Build:
 
 ```bash
 npm install && npm run build
 ```
 
-4. Start command:
+Start:
 
 ```bash
 npm run start:prod
 ```
 
-5. Add env vars:
+Required env:
 - `PORT`
-- `FRONTEND_URL` (your Vercel domain)
+- `FRONTEND_URL`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
-6. Deploy.
+- `STRIPE_WEEKLY_PRICE_ID`
+- `GEMINI_API_KEY` (if AI chat enabled)
 
-## 7.3 Stripe webhook (cloud)
+## 9. API Summary
 
-After Render deploy:
-1. Set webhook URL to `https://<render-domain>/billing/webhook`
-2. Enable events:
-- `checkout.session.completed`
-- `customer.subscription.updated`
-- `customer.subscription.deleted`
-3. Copy webhook secret to Render env `STRIPE_WEBHOOK_SECRET`
-
-## 8. API Endpoints
-
-### Health
 - `GET /health`
-
-### Resume
-- `POST /resume/upload` (multipart: `file`, `userId`)
+- `POST /resume/upload`
 - `GET /resume/:userId/latest`
-
-### Billing
 - `POST /billing/checkout-session`
 - `POST /billing/webhook`
-
-### Subscription
 - `GET /subscription/:userId`
-
-### Profile
 - `GET /profile/:userId`
 - `POST /profile`
-
-### Onboarding
 - `GET /onboarding/:userId`
 - `POST /onboarding/initialize`
 - `POST /onboarding/sync`
 - `POST /onboarding/step`
+- `POST /ai/chat`
 
-## 9. Common Troubleshooting
+## 10. Troubleshooting
 
-1. `Only PDF files are supported`
-- Ensure uploaded file MIME is `application/pdf`.
+1. `column ... does not exist`
+- Re-run `job-assistant-api/sql/init.sql` (schema is outdated).
 
-2. Stripe checkout fails with missing key
-- Check `STRIPE_SECRET_KEY` and `NEXT_PUBLIC_STRIPE_PRICE_ID`.
+2. `Could not find table 'public.onboarding_states' in schema cache`
+- Ensure SQL script has been executed in the same Supabase project used by backend env.
 
-3. Checkout success but status not updated
-- Verify webhook endpoint availability and signature secret.
+3. Stripe success but subscription not updated
+- Check webhook URL, enabled events, and `STRIPE_WEBHOOK_SECRET`.
 
-4. Supabase write failure
-- Verify `SUPABASE_SERVICE_ROLE_KEY`.
-- Ensure SQL initialization script has been executed.
+4. AI chat returns quota/billing errors
+- Check `GEMINI_API_KEY` validity and provider usage limits.
 
-5. `Could not find table 'public.onboarding_states' in the schema cache`
-- Your project ran an older SQL schema without onboarding table.
-- Re-run `job-assistant-api/sql/init.sql` or just run the incremental SQL in section 4.
-
-5. CORS error
-- Set backend `FRONTEND_URL` to exact frontend origin.
-
-## 10. Clerk Status
-
-Implemented now:
-- `/sign-in` and `/sign-up` use Clerk components
-- `middleware.ts` protects `/dashboard*` routes
-- Dashboard/Resume/Billing pages use Clerk `user.id` as primary user identity
-
-Still next phase:
-- Backend-side Clerk JWT verification (currently backend still accepts `userId` from request payload/path)
+5. CORS errors
+- Ensure backend `FRONTEND_URL` exactly matches frontend origin.
