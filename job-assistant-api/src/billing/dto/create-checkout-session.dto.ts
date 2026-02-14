@@ -1,4 +1,14 @@
-import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
+
+type BillingCycle = 'weekly' | 'monthly' | 'yearly';
 
 export class CreateCheckoutSessionDto {
   @IsString()
@@ -6,8 +16,13 @@ export class CreateCheckoutSessionDto {
   userId!: string;
 
   @IsString()
+  @IsOptional()
   @MinLength(1)
-  priceId!: string;
+  priceId?: string;
+
+  @IsOptional()
+  @IsIn(['weekly', 'monthly', 'yearly'])
+  billingCycle?: BillingCycle;
 
   @IsString()
   @MinLength(1)

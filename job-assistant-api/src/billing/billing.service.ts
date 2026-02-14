@@ -6,6 +6,8 @@ import { SubscriptionStatus } from '../common/types/shared';
 import { SubscriptionService } from '../subscription/subscription.service';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 
+type BillingCycle = 'weekly' | 'monthly' | 'yearly';
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -21,23 +23,59 @@ export class BillingService {
     return new Stripe(secret);
   }
 
+  private getConfiguredPriceId(cycle: BillingCycle): string {
+    const envMap: Record<BillingCycle, string | undefined> = {
+      weekly: process.env.STRIPE_WEEKLY_PRICE_ID,
+      monthly: process.env.STRIPE_MONTHLY_PRICE_ID,
+      yearly: process.env.STRIPE_YEARLY_PRICE_ID,
+    };
+    const priceId = envMap[cycle];
+    if (!priceId) {
+      throw new BadRequestException(`Missing Stripe price id for ${cycle} plan.`);
+    }
+    return priceId;
+  }
+
+  private resolveCycleFromRequest(dto: CreateCheckoutSessionDto): BillingCycle {
+    if (dto.billingCycle) {
+      return dto.billingCycle;
+    }
+
+    const weekly = process.env.STRIPE_WEEKLY_PRICE_ID;
+    const monthly = process.env.STRIPE_MONTHLY_PRICE_ID;
+    const yearly = process.env.STRIPE_YEARLY_PRICE_ID;
+    if (dto.priceId && weekly && dto.priceId === weekly) return 'weekly';
+    if (dto.priceId && monthly && dto.priceId === monthly) return 'monthly';
+    if (dto.priceId && yearly && dto.priceId === yearly) return 'yearly';
+
+    if (dto.trialDays && dto.trialDays > 0) {
+      return 'weekly';
+    }
+
+    throw new BadRequestException(
+      'Unable to resolve billing cycle. Send billingCycle or a known priceId.',
+    );
+  }
+
   async createCheckoutSession(dto: CreateCheckoutSessionDto) {
     const stripe = this.getStripeClient();
+    const billingCycle = this.resolveCycleFromRequest(dto);
+    const configuredPriceId = this.getConfiguredPriceId(billingCycle);
+    const existing = await this.subscriptionService.getSubscription(dto.userId);
+    let customerId = existing.stripeCustomerId;
+
+    if (dto.priceId && dto.priceId !== configuredPriceId) {
+      throw new BadRequestException(
+        `Price mismatch for ${billingCycle} plan. Use backend configured price.`,
+      );
+    }
+
     const trialRequested = Boolean(dto.trialDays && dto.trialDays > 0);
     if (trialRequested) {
-      const weeklyPriceId = process.env.STRIPE_WEEKLY_PRICE_ID;
-      if (!weeklyPriceId) {
-        throw new BadRequestException(
-          'STRIPE_WEEKLY_PRICE_ID is missing. Weekly trial cannot be used.',
-        );
-      }
-      if (dto.priceId !== weeklyPriceId) {
-        throw new BadRequestException(
-          'Trial is only available for the weekly plan.',
-        );
+      if (billingCycle !== 'weekly') {
+        throw new BadRequestException('Trial is only available for the weekly plan.');
       }
 
-      const existing = await this.subscriptionService.getSubscription(dto.userId);
       const hasSubscribedBefore =
         Boolean(existing.stripeSubscriptionId) ||
         Boolean(existing.stripeCustomerId) ||
@@ -50,23 +88,41 @@ export class BillingService {
       }
     }
 
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        metadata: { userId: dto.userId },
+      });
+      customerId = customer.id;
+    }
+
+    await this.subscriptionService.upsertFromStripe({
+      userId: dto.userId,
+      status: 'incomplete',
+      plan: configuredPriceId,
+      stripeCustomerId: customerId,
+      stripeSubscriptionId: undefined,
+      currentPeriodEnd: undefined,
+    });
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       success_url: dto.successUrl,
       cancel_url: dto.cancelUrl,
       line_items: [
         {
-          price: dto.priceId,
+          price: configuredPriceId,
           quantity: 1,
         },
       ],
-      subscription_data:
-        dto.trialDays && dto.trialDays > 0
+      customer: customerId,
+      subscription_data: {
+        ...(dto.trialDays && dto.trialDays > 0
           ? {
               trial_period_days: dto.trialDays,
-              metadata: { userId: dto.userId },
             }
-          : undefined,
+          : {}),
+        metadata: { userId: dto.userId },
+      },
       client_reference_id: dto.userId,
       metadata: {
         userId: dto.userId,

@@ -34,9 +34,11 @@ Required for core features:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_WEEKLY_PRICE_ID`
+- `STRIPE_MONTHLY_PRICE_ID`
+- `STRIPE_YEARLY_PRICE_ID`
 
 Optional:
-- `STRIPE_WEEKLY_PRICE_ID` (weekly trial logic helper)
 - `GEMINI_API_KEY`, `GEMINI_MODEL` (AI chat)
 - `CLERK_SECRET_KEY` (future backend JWT verification phase)
 
