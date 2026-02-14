@@ -12,13 +12,33 @@ async function bootstrap() {
     rawBody: true,
   });
   const logger = app.get(AppLoggerService);
+  const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ].filter((value): value is string => Boolean(value));
 
   app.useLogger(logger);
   app.enableCors({
-    origin: [
-      process.env.FRONTEND_URL || 'http://localhost:3000',
-      'http://localhost:3000',
-    ],
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      try {
+        const isAllowedVercelPreview =
+          new URL(origin).hostname.endsWith('.vercel.app');
+        if (allowedOrigins.includes(origin) || isAllowedVercelPreview) {
+          callback(null, true);
+          return;
+        }
+      } catch {
+        // fall through to rejection
+      }
+
+      callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    },
     credentials: true,
   });
   app.useGlobalPipes(
