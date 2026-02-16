@@ -161,6 +161,14 @@ export class SupabaseService {
     return rows[0] ?? null;
   }
 
+  async getResumeHistory(userId: string, limit = 2) {
+    const queryUserId = encodeURIComponent(userId);
+    const safeLimit = Math.max(1, Math.min(limit, 20));
+    return this.request<ResumeRow[]>(
+      `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=${safeLimit}&select=id,user_id,parsed_json,created_at`,
+    );
+  }
+
   async upsertSubscription(record: SubscriptionRecord) {
     const payload = [
       {

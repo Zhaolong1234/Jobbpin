@@ -38,5 +38,10 @@ export class ChatDto {
   @ValidateNested({ each: true })
   @Type(() => ChatHistoryItemDto)
   history?: ChatHistoryItemDto[];
-}
 
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  planId?: string;
+}
