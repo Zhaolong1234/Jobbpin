@@ -86,6 +86,10 @@ export default function DashboardLayout({
     if (!user) return "User";
     return user.firstName || user.username || user.primaryEmailAddress?.emailAddress || "User";
   }, [user]);
+  const activeNav = useMemo(() => {
+    const matched = NAV_ITEMS.find((item) => pathname === item.href);
+    return matched?.label || "Workspace";
+  }, [pathname]);
 
   const initial = displayName.charAt(0).toLowerCase();
 
@@ -98,22 +102,28 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f7ff]">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-[1720px] items-center gap-4 px-4 py-2.5 md:px-6">
+    <div className="min-h-screen bg-transparent">
+      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/80 backdrop-blur-lg">
+        <div className="mx-auto flex w-full max-w-[1720px] items-center gap-4 px-4 py-3 md:px-6">
           <div className="flex shrink-0 items-center">
             <BrandLogo href="/" className="origin-left scale-[0.54]" />
           </div>
 
+          <div className="hidden items-center rounded-full border border-slate-200 bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-500 md:inline-flex">
+            <span>Workspace</span>
+            <span className="mx-2 text-slate-300">/</span>
+            <span className="font-semibold text-slate-700">{activeNav}</span>
+          </div>
+
           <div className="flex min-w-0 flex-1 items-center justify-end">
-            <nav className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 p-1 shadow-[0_4px_16px_rgba(15,23,42,0.04)]">
+            <nav className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50/95 p-1 shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
               {NAV_ITEMS.map((item) => {
                 const active = pathname === item.href;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`rounded-full px-5 py-1.5 text-[14px] font-medium transition ${
+                    className={`rounded-full px-5 py-2 text-[15px] font-semibold transition ${
                       active
                         ? "bg-white text-slate-900 shadow-sm"
                         : "text-slate-600 hover:bg-white hover:text-slate-900"

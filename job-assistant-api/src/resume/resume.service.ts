@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import pdfParse = require('pdf-parse');
 
 import { AppLoggerService } from '../common/logger/app-logger.service';
@@ -38,6 +43,7 @@ type ParsedEducation = NonNullable<ResumeParsed['education']>[number];
 @Injectable()
 export class ResumeService {
   private readonly memoryStore = new Map<string, ResumeRecord>();
+  private readonly memoryHistory = new Map<string, ResumeRecord[]>();
 
   constructor(
     private readonly supabaseService: SupabaseService,
@@ -56,6 +62,344 @@ export class ResumeService {
       parsed: row.parsed_json,
       createdAt: row.created_at,
     };
+  }
+
+  private get dmxApiUrl(): string {
+    return process.env.DMXAPI_RESPONSES_URL || 'https://www.dmxapi.cn/v1/responses';
+  }
+
+  private get dmxApiKey(): string | undefined {
+    return process.env.DMXAPI_API_KEY;
+  }
+
+  private get dmxApiModel(): string {
+    return process.env.DMXAPI_PARSE_MODEL || 'hehe-tywd';
+  }
+
+  private get dmxChatUrl(): string {
+    return process.env.DMXAPI_CHAT_URL || 'https://www.dmxapi.cn/v1/chat/completions';
+  }
+
+  private get dmxChatModel(): string {
+    return process.env.DMXAPI_CHAT_MODEL || 'gpt-5-mini';
+  }
+
+  private toNonEmptyString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private extractTextFromDmxPayload(payload: unknown): string | null {
+    if (!payload || typeof payload !== 'object') return null;
+
+    const root = payload as Record<string, unknown>;
+    const directCandidates = [
+      root.output_text,
+      root.markdown,
+      root.text,
+      (root.result as Record<string, unknown> | undefined)?.markdown,
+      (root.result as Record<string, unknown> | undefined)?.text,
+      (root.data as Record<string, unknown> | undefined)?.markdown,
+      (root.data as Record<string, unknown> | undefined)?.text,
+    ]
+      .map((item) => this.toNonEmptyString(item))
+      .filter((item): item is string => Boolean(item));
+    if (directCandidates.length > 0) {
+      return directCandidates.join('\n');
+    }
+
+    const collected: string[] = [];
+    const walk = (node: unknown, depth: number) => {
+      if (depth > 5 || node === null || node === undefined) return;
+      if (typeof node === 'string') {
+        const text = node.trim();
+        if (text.length >= 24) {
+          collected.push(text);
+        }
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          walk(item, depth + 1);
+        }
+        return;
+      }
+      if (typeof node !== 'object') return;
+      const obj = node as Record<string, unknown>;
+      const priorityKeys = ['markdown', 'text', 'content', 'output_text'];
+      for (const key of priorityKeys) {
+        if (key in obj) {
+          walk(obj[key], depth + 1);
+        }
+      }
+      for (const [key, value] of Object.entries(obj)) {
+        if (priorityKeys.includes(key)) continue;
+        if (
+          key === 'data' ||
+          key === 'result' ||
+          key === 'output' ||
+          key === 'detail' ||
+          key === 'pages' ||
+          key === 'choices' ||
+          key === 'message'
+        ) {
+          walk(value, depth + 1);
+        }
+      }
+    };
+    walk(root, 0);
+
+    if (!collected.length) return null;
+    return collected.slice(0, 200).join('\n');
+  }
+
+  private extractJsonBlock(text: string): string {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    return fenced?.[1] || text;
+  }
+
+  private parseDmxChatContent(payload: unknown): string | null {
+    if (!payload || typeof payload !== 'object') return null;
+    const data = payload as {
+      choices?: Array<{
+        message?: {
+          content?: string | Array<{ text?: string }>;
+        };
+      }>;
+    };
+    const content = data.choices?.[0]?.message?.content;
+    if (typeof content === 'string') {
+      const trimmed = content.trim();
+      return trimmed || null;
+    }
+    if (Array.isArray(content)) {
+      const merged = content
+        .map((item) => item?.text?.trim() || '')
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      return merged || null;
+    }
+    return null;
+  }
+
+  private toStringOrUndefined(value: unknown, max = 400): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const text = value.trim().replace(/\s+/g, ' ');
+    if (!text) return undefined;
+    return text.slice(0, max);
+  }
+
+  private toStringArray(value: unknown, maxItems = 20, maxLen = 220): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim().replace(/\s+/g, ' ') : ''))
+      .filter(Boolean)
+      .slice(0, maxItems)
+      .map((item) => item.slice(0, maxLen));
+  }
+
+  private normalizeStructuredResume(candidate: unknown): ResumeParsed | null {
+    if (!candidate || typeof candidate !== 'object') return null;
+    const root = candidate as Record<string, unknown>;
+    const basicsRaw = (root.basics || {}) as Record<string, unknown>;
+    const basics = {
+      name: this.toStringOrUndefined(basicsRaw.name, 80),
+      email: this.toStringOrUndefined(basicsRaw.email, 120),
+      phone: this.toStringOrUndefined(basicsRaw.phone, 60),
+      location: this.toStringOrUndefined(basicsRaw.location, 120),
+      link: this.toStringOrUndefined(basicsRaw.link, 240),
+      summary: this.toStringOrUndefined(basicsRaw.summary, 900),
+    };
+    const skills = this.toStringArray(root.skills, 40, 80);
+    const experiences = Array.isArray(root.experiences)
+      ? root.experiences
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const exp = item as Record<string, unknown>;
+            return {
+              company: this.toStringOrUndefined(exp.company, 120),
+              title: this.toStringOrUndefined(exp.title, 120),
+              start: this.toStringOrUndefined(exp.start, 40),
+              end: this.toStringOrUndefined(exp.end, 40),
+              summary: this.toStringOrUndefined(exp.summary, 500),
+              highlights: this.toStringArray(exp.highlights, 8, 280),
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => Boolean(item))
+          .slice(0, 8)
+      : [];
+    const education = Array.isArray(root.education)
+      ? root.education
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const edu = item as Record<string, unknown>;
+            return {
+              school: this.toStringOrUndefined(edu.school, 160),
+              degree: this.toStringOrUndefined(edu.degree, 160),
+              gpa: this.toStringOrUndefined(edu.gpa, 40),
+              date: this.toStringOrUndefined(edu.date, 80),
+              descriptions: this.toStringArray(edu.descriptions, 6, 260),
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => Boolean(item))
+          .slice(0, 6)
+      : [];
+
+    const hasAnyData =
+      Boolean(
+        basics.name ||
+          basics.email ||
+          basics.phone ||
+          basics.location ||
+          basics.link ||
+          basics.summary,
+      ) ||
+      skills.length > 0 ||
+      experiences.length > 0 ||
+      education.length > 0;
+    if (!hasAnyData) return null;
+
+    return {
+      parser: {
+        provider: 'dmxapi',
+        model: this.dmxChatModel,
+        mode: 'ocr+llm-structured',
+      },
+      basics,
+      skills,
+      experiences,
+      education,
+    };
+  }
+
+  private async structureResumeByDmxLlm(
+    extractedText: string,
+    userId: string,
+  ): Promise<ResumeParsed | null> {
+    if (!this.dmxApiKey) return null;
+    const prompt = `You are a resume parser. Convert resume text into strict JSON only.
+Schema:
+{"basics":{"name":"","email":"","phone":"","location":"","link":"","summary":""},"skills":[],"experiences":[{"company":"","title":"","start":"","end":"","summary":"","highlights":[]}],"education":[{"school":"","degree":"","gpa":"","date":"","descriptions":[]}]}
+Rules: use only source text, no hallucination, unknown -> empty string/array.
+Resume text:
+${extractedText.slice(0, 18000)}`;
+
+    const response = await fetch(this.dmxChatUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.dmxApiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.dmxChatModel,
+        messages: [
+          { role: 'system', content: 'You are a precise JSON generator.' },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const providerError = (await response.text()).slice(0, 240);
+      this.logger.warn(
+        `DMX LLM structuring failed for user ${userId}: ${response.status} ${providerError}`,
+        'ResumeService',
+      );
+      return null;
+    }
+    const payload = (await response.json()) as unknown;
+    const content = this.parseDmxChatContent(payload);
+    if (!content) return null;
+    try {
+      const parsed = JSON.parse(this.extractJsonBlock(content)) as unknown;
+      return this.normalizeStructuredResume(parsed);
+    } catch (error) {
+      this.logger.warn(
+        `DMX LLM returned non-JSON content for user ${userId}: ${(error as Error).message}`,
+        'ResumeService',
+      );
+      return null;
+    }
+  }
+
+  private async parseByDmx(fileBuffer: Buffer, userId: string): Promise<ResumeParsed> {
+    if (!this.dmxApiKey) {
+      throw new ServiceUnavailableException(
+        'Missing DMXAPI_API_KEY. Please configure DMXAPI API key in backend env.',
+      );
+    }
+
+    const input = fileBuffer.toString('base64');
+    const response = await fetch(this.dmxApiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.dmxApiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.dmxApiModel,
+        input,
+        pdf_pwd: '',
+        page_start: 0,
+        page_count: 1000,
+        parse_mode: 'scan',
+        dpi: 144,
+        apply_document_tree: 1,
+        table_flavor: 'html',
+        get_image: 'none',
+        image_output_type: 'default',
+        paratext_mode: 'annotation',
+        formula_level: 0,
+        underline_level: 0,
+        apply_merge: 1,
+        apply_image_analysis: 0,
+        apply_chart: 0,
+        crop_dewarp: 0,
+        remove_watermark: 0,
+        markdown_details: 1,
+        page_details: 1,
+        raw_ocr: 0,
+        char_details: 0,
+        catalog_details: 0,
+        get_excel: 0,
+      }),
+    });
+
+    if (!response.ok) {
+      const providerError = (await response.text()).slice(0, 300);
+      this.logger.error(
+        `DMX parse failed for user ${userId}: ${response.status} ${providerError}`,
+        undefined,
+        'ResumeService',
+      );
+      throw new BadGatewayException(
+        `DMX parse request failed (${response.status}).`,
+      );
+    }
+
+    const payload = (await response.json()) as unknown;
+    const extractedText = this.extractTextFromDmxPayload(payload);
+    if (!extractedText) {
+      this.logger.warn(
+        `DMX parse returned empty text for user ${userId}`,
+        'ResumeService',
+      );
+      throw new BadGatewayException('DMX parse returned empty content.');
+    }
+
+    const llmStructured = await this.structureResumeByDmxLlm(extractedText, userId);
+    if (llmStructured) {
+      return llmStructured;
+    }
+
+    const fallback = this.parseText(extractedText);
+    fallback.parser = {
+      provider: 'dmxapi',
+      model: this.dmxApiModel,
+      mode: 'ocr+rule-fallback',
+    };
+    return fallback;
   }
 
   private extractEmail(text: string): string | undefined {
@@ -446,6 +790,11 @@ export class ResumeService {
     const education = this.extractEducation(educationSource);
 
     return {
+      parser: {
+        provider: 'local',
+        model: 'pdf-parse+rules',
+        mode: 'rule-based',
+      },
       basics: {
         name: this.extractName(
           profileAndSummaryLines.length > 0 ? profileAndSummaryLines : lines,
@@ -466,20 +815,41 @@ export class ResumeService {
     if (!fileBuffer || fileBuffer.length === 0) {
       throw new BadRequestException('Uploaded file is empty.');
     }
-    let parsedPdf: Awaited<ReturnType<typeof pdfParse>>;
-    try {
-      parsedPdf = await pdfParse(fileBuffer);
-    } catch (error) {
+    let parsed: ResumeParsed;
+    if (this.dmxApiKey) {
+      parsed = await this.parseByDmx(fileBuffer, userId);
+    } else {
+      let parsedPdf: Awaited<ReturnType<typeof pdfParse>>;
+      try {
+        parsedPdf = await pdfParse(fileBuffer);
+      } catch (error) {
+        this.logger.warn(
+          `PDF parse failed for user ${userId}: ${(error as Error).message}`,
+          'ResumeService',
+        );
+        throw new BadRequestException(
+          'Cannot parse this PDF. Please try another resume file.',
+        );
+      }
+      parsed = this.parseText(parsedPdf.text || '');
       this.logger.warn(
-        `PDF parse failed for user ${userId}: ${(error as Error).message}`,
+        'DMXAPI_API_KEY is missing. Falling back to local pdf-parse.',
         'ResumeService',
       );
-      throw new BadRequestException(
-        'Cannot parse this PDF. Please try another resume file.',
-      );
     }
-    const parsed = this.parseText(parsedPdf.text || '');
 
+    return this.saveParsed(userId, parsed);
+  }
+
+  async getLatest(userId: string): Promise<ResumeRecord | null> {
+    if (this.supabaseService.isConfigured()) {
+      const row = await this.supabaseService.getLatestResume(userId);
+      return row ? this.mapRowToRecord(row) : null;
+    }
+    return this.memoryStore.get(userId) ?? null;
+  }
+
+  async saveParsed(userId: string, parsed: ResumeParsed): Promise<ResumeRecord> {
     if (this.supabaseService.isConfigured()) {
       const row = await this.supabaseService.insertResume(userId, parsed);
       if (!row) {
@@ -495,14 +865,39 @@ export class ResumeService {
       createdAt: new Date().toISOString(),
     };
     this.memoryStore.set(userId, localRecord);
+    const history = this.memoryHistory.get(userId) ?? [];
+    history.unshift(localRecord);
+    this.memoryHistory.set(userId, history.slice(0, 10));
     return localRecord;
   }
 
-  async getLatest(userId: string): Promise<ResumeRecord | null> {
+  async rollbackToPrevious(userId: string): Promise<ResumeRecord | null> {
     if (this.supabaseService.isConfigured()) {
-      const row = await this.supabaseService.getLatestResume(userId);
+      const history = await this.supabaseService.getResumeHistory(userId, 2);
+      if (!history[1]) {
+        return null;
+      }
+      const row = await this.supabaseService.insertResume(
+        userId,
+        history[1].parsed_json,
+      );
       return row ? this.mapRowToRecord(row) : null;
     }
-    return this.memoryStore.get(userId) ?? null;
+
+    const history = this.memoryHistory.get(userId) ?? [];
+    if (history.length < 2) {
+      return null;
+    }
+    const previous = history[1];
+    const restored: ResumeRecord = {
+      id: `local_${Date.now()}`,
+      userId,
+      parsed: previous.parsed,
+      createdAt: new Date().toISOString(),
+    };
+    this.memoryStore.set(userId, restored);
+    history.unshift(restored);
+    this.memoryHistory.set(userId, history.slice(0, 10));
+    return restored;
   }
 }

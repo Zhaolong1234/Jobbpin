@@ -39,7 +39,8 @@ Required for core features:
 - `STRIPE_YEARLY_PRICE_ID`
 
 Optional:
-- `GEMINI_API_KEY`, `GEMINI_MODEL` (AI chat)
+- `DMXAPI_API_KEY`, `DMXAPI_RESPONSES_URL`, `DMXAPI_PARSE_MODEL` (resume parsing via DMX API)
+- `DMXAPI_CHAT_URL`, `DMXAPI_CHAT_MODEL` (AI chat via DMX API)
 - `CLERK_SECRET_KEY` (future backend JWT verification phase)
 
 ## 3. Database Schema
@@ -72,6 +73,8 @@ Important rule:
 - `POST /onboarding/sync`
 - `POST /onboarding/step`
 - `POST /ai/chat`
+- `POST /ai/implement-plan`
+- `POST /ai/rollback-resume`
 
 ## 5. Notes
 

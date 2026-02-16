@@ -6,6 +6,11 @@ export type SubscriptionStatus =
   | "incomplete";
 
 export interface ResumeParsed {
+  parser?: {
+    provider: string;
+    model?: string;
+    mode?: string;
+  };
   basics: {
     name?: string;
     email?: string;
