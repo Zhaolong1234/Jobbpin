@@ -11,6 +11,14 @@ export interface ResumeParsed {
     model?: string;
     mode?: string;
   };
+  aiAssessment?: {
+    score: number;
+    summary?: string;
+    strengths?: string[];
+    improvements?: string[];
+    generatedAt?: string;
+    model?: string;
+  };
   basics: {
     name?: string;
     email?: string;
@@ -42,6 +50,7 @@ export interface ResumeRecord {
   userId: string;
   parsed: ResumeParsed;
   createdAt: string;
+  templateId?: string;
 }
 
 export interface SubscriptionRecord {
@@ -51,6 +60,7 @@ export interface SubscriptionRecord {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   currentPeriodEnd?: string;
+  cancelAtPeriodEnd?: boolean;
 }
 
 export interface ProfileRecord {

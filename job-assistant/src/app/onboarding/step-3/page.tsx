@@ -106,20 +106,25 @@ export default function Step3Page() {
   };
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+    <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
       <div className="panel">
-        <div className="panel-body space-y-5">
+        <div className="panel-body space-y-6 md:p-7">
           <StatusBanner status={status} message={message} />
           <div className="space-y-2">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">Step 3 of 4</p>
-            <h1 className="text-3xl font-extrabold text-slate-900 md:text-4xl">Links and Portfolio</h1>
+            <h1 className="text-[clamp(1.95rem,3vw,3rem)] font-extrabold leading-tight tracking-[-0.02em] text-slate-900">
+              Links and Portfolio
+            </h1>
+            <p className="text-base leading-relaxed text-slate-500 md:text-lg">
+              Add optional links to strengthen trust and provide deeper proof of your work.
+            </p>
           </div>
 
           <div className="space-y-4">
             <label className="label block">
               LinkedIn Profile <span className="text-slate-400">(optional)</span>
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 placeholder="https://linkedin.com/in/..."
                 value={profile.linkedinUrl || ""}
                 onChange={(e) => setProfile((prev) => ({ ...prev, linkedinUrl: e.target.value }))}
@@ -129,7 +134,7 @@ export default function Step3Page() {
             <label className="label block">
               Personal Website / Portfolio <span className="text-slate-400">(optional)</span>
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 placeholder="https://..."
                 value={profile.portfolioUrl || ""}
                 onChange={(e) => setProfile((prev) => ({ ...prev, portfolioUrl: e.target.value }))}

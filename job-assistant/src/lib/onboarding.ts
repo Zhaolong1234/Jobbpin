@@ -12,6 +12,10 @@ export interface OnboardingSignals {
   profileSkipped?: boolean;
 }
 
+function isSubscribedStatus(status: string): boolean {
+  return ["trialing", "active", "past_due"].includes(status);
+}
+
 export function isProfileCompleted(profile: ProfileRecord | null): boolean {
   if (!profile) return false;
   const hasTargetRole = Boolean(profile.targetRole.trim());
@@ -50,7 +54,7 @@ export async function computeOnboardingSignals(
     signals: {
       profileCompleted: isProfileCompleted(profile),
       resumeUploaded: Boolean(resume?.id),
-      subscriptionActive: subscription.status === "active",
+      subscriptionActive: isSubscribedStatus(subscription.status),
       profileSkipped: Boolean(profile?.profileSkipped),
     },
   };

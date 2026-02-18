@@ -10,7 +10,7 @@ export default function OnboardingLayout({
 }) {
   return (
     <div className="min-h-screen bg-slate-100">
-      <header className="page-container flex items-center justify-between py-5">
+      <header className="onboarding-container flex items-center justify-between py-5">
         <BrandLogo href="/" className="origin-left scale-[0.62] text-[#3563ff]" />
         <SignedIn>
           <div className="rounded-full border border-slate-300 bg-white px-3 py-1">
@@ -18,7 +18,7 @@ export default function OnboardingLayout({
           </div>
         </SignedIn>
       </header>
-      <main className="page-container pt-2">
+      <main className="onboarding-container onboarding-main pt-2">
         <OnboardingGuard>{children}</OnboardingGuard>
       </main>
     </div>

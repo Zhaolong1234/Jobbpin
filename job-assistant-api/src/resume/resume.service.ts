@@ -8,6 +8,7 @@ import pdfParse = require('pdf-parse');
 
 import { AppLoggerService } from '../common/logger/app-logger.service';
 import { ResumeParsed, ResumeRecord } from '../common/types/shared';
+import { SubscriptionService } from '../subscription/subscription.service';
 import { SupabaseService } from '../supabase/supabase.service';
 
 const SKILL_KEYWORDS = [
@@ -39,6 +40,14 @@ const SECTION_HEADING_REGEX =
   /^(SUMMARY|WORK EXPERIENCE|PROJECTS EXPERIENCES|EDUCATION|REFERENCES|PROGRAMMING LANGUAGE|SKILLS?)$/i;
 type ParsedExperience = ResumeParsed['experiences'][number];
 type ParsedEducation = NonNullable<ResumeParsed['education']>[number];
+type ResumeAiAssessment = NonNullable<ResumeParsed['aiAssessment']>;
+type ResumeTemplateId = 'classic' | 'modern' | 'compact';
+const FREE_TEMPLATE_ID: ResumeTemplateId = 'classic';
+const SUPPORTED_TEMPLATE_IDS = new Set<ResumeTemplateId>([
+  'classic',
+  'modern',
+  'compact',
+]);
 
 @Injectable()
 export class ResumeService {
@@ -47,20 +56,33 @@ export class ResumeService {
 
   constructor(
     private readonly supabaseService: SupabaseService,
+    private readonly subscriptionService: SubscriptionService,
     private readonly logger: AppLoggerService,
   ) {}
+
+  private isSubscribedStatus(status: string): boolean {
+    return ['trialing', 'active', 'past_due'].includes(status);
+  }
+
+  private normalizeTemplateId(templateId?: string): ResumeTemplateId | undefined {
+    if (!templateId) return undefined;
+    const normalized = templateId.trim().toLowerCase() as ResumeTemplateId;
+    return SUPPORTED_TEMPLATE_IDS.has(normalized) ? normalized : FREE_TEMPLATE_ID;
+  }
 
   private mapRowToRecord(row: {
     id: string;
     user_id: string;
     parsed_json: ResumeParsed;
     created_at: string;
+    template_id?: string | null;
   }): ResumeRecord {
     return {
       id: row.id,
       userId: row.user_id,
       parsed: row.parsed_json,
       createdAt: row.created_at,
+      templateId: row.template_id ?? undefined,
     };
   }
 
@@ -200,6 +222,148 @@ export class ResumeService {
       .map((item) => item.slice(0, maxLen));
   }
 
+  private normalizeAiAssessment(candidate: unknown): ResumeAiAssessment | null {
+    if (!candidate || typeof candidate !== 'object') return null;
+    const root = candidate as Record<string, unknown>;
+    const scoreRaw = root.score;
+    const parsedScore =
+      typeof scoreRaw === 'number'
+        ? scoreRaw
+        : typeof scoreRaw === 'string'
+          ? Number.parseFloat(scoreRaw)
+          : NaN;
+    if (!Number.isFinite(parsedScore)) return null;
+
+    const score = Math.max(0, Math.min(100, Math.round(parsedScore)));
+    return {
+      score,
+      summary: this.toStringOrUndefined(root.summary, 320),
+      strengths: this.toStringArray(root.strengths, 5, 180),
+      improvements: this.toStringArray(root.improvements, 5, 180),
+      generatedAt: this.toStringOrUndefined(root.generatedAt, 60),
+      model: this.toStringOrUndefined(root.model, 80),
+    };
+  }
+
+  private buildHeuristicAssessment(parsed: ResumeParsed): ResumeAiAssessment {
+    let score = 0;
+    if (parsed.basics.name || parsed.basics.email) score += 20;
+    if (parsed.basics.summary) score += 20;
+    if (parsed.skills.length > 0) score += 20;
+    if (parsed.experiences.length > 0) score += 20;
+    if ((parsed.education || []).length > 0) score += 20;
+
+    const strengths: string[] = [];
+    if (parsed.basics.summary) strengths.push('Has a professional summary section.');
+    if (parsed.skills.length > 0) strengths.push(`Contains ${parsed.skills.length} extracted skills.`);
+    if (parsed.experiences.length > 0) {
+      strengths.push(`Includes ${parsed.experiences.length} work experience entries.`);
+    }
+
+    const improvements: string[] = [];
+    if (!parsed.basics.summary) improvements.push('Add a concise summary tailored to your target role.');
+    if (parsed.skills.length < 8) improvements.push('Expand skill keywords for stronger ATS matching.');
+    if (parsed.experiences.length === 0) improvements.push('Add experience bullets with measurable outcomes.');
+    if ((parsed.education || []).length === 0) improvements.push('Add education details for profile completeness.');
+
+    return {
+      score,
+      summary: 'Fallback score based on extracted section completeness.',
+      strengths: strengths.slice(0, 3),
+      improvements: improvements.slice(0, 3),
+      generatedAt: new Date().toISOString(),
+      model: this.dmxApiKey ? this.dmxChatModel : 'local-heuristic',
+    };
+  }
+
+  private buildAssessmentContext(parsed: ResumeParsed): string {
+    const payload = {
+      basics: parsed.basics,
+      skills: parsed.skills.slice(0, 40),
+      experiences: parsed.experiences.slice(0, 6).map((exp) => ({
+        company: exp.company,
+        title: exp.title,
+        start: exp.start,
+        end: exp.end,
+        summary: exp.summary,
+        highlights: (exp.highlights || []).slice(0, 6),
+      })),
+      education: (parsed.education || []).slice(0, 6),
+    };
+    return JSON.stringify(payload, null, 2).slice(0, 20000);
+  }
+
+  private async scoreResumeWithAi(parsed: ResumeParsed, userId: string): Promise<ResumeAiAssessment> {
+    const fallback = this.buildHeuristicAssessment(parsed);
+    if (!this.dmxApiKey) {
+      return fallback;
+    }
+
+    const prompt = `You are a senior ATS resume reviewer.
+Score the resume from 0 to 100 and provide concise insights.
+Return STRICT JSON only using this schema:
+{
+  "score": 0,
+  "summary": "one sentence",
+  "strengths": ["..."],
+  "improvements": ["..."]
+}
+Rules:
+- score must be an integer between 0 and 100.
+- be evidence-based from the provided resume JSON.
+- keep each item under 160 chars.
+- do not include markdown or extra keys.
+
+Resume JSON:
+${this.buildAssessmentContext(parsed)}`;
+
+    try {
+      const response = await fetch(this.dmxChatUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.dmxApiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.dmxChatModel,
+          messages: [
+            { role: 'system', content: 'You are a strict JSON generator. Return JSON only.' },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const providerError = (await response.text()).slice(0, 240);
+        this.logger.warn(
+          `AI scoring failed for user ${userId}: ${response.status} ${providerError}`,
+          'ResumeService',
+        );
+        return fallback;
+      }
+
+      const payload = (await response.json()) as unknown;
+      const content = this.parseDmxChatContent(payload);
+      if (!content) return fallback;
+
+      const parsedJson = JSON.parse(this.extractJsonBlock(content)) as unknown;
+      const normalized = this.normalizeAiAssessment(parsedJson);
+      if (!normalized) return fallback;
+
+      return {
+        ...normalized,
+        generatedAt: normalized.generatedAt || new Date().toISOString(),
+        model: normalized.model || this.dmxChatModel,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `AI scoring fallback for user ${userId}: ${(error as Error).message}`,
+        'ResumeService',
+      );
+      return fallback;
+    }
+  }
+
   private normalizeStructuredResume(candidate: unknown): ResumeParsed | null {
     if (!candidate || typeof candidate !== 'object') return null;
     const root = candidate as Record<string, unknown>;
@@ -246,6 +410,7 @@ export class ResumeService {
           .filter((item): item is NonNullable<typeof item> => Boolean(item))
           .slice(0, 6)
       : [];
+    const aiAssessment = this.normalizeAiAssessment(root.aiAssessment);
 
     const hasAnyData =
       Boolean(
@@ -271,6 +436,7 @@ export class ResumeService {
       skills,
       experiences,
       education,
+      aiAssessment: aiAssessment || undefined,
     };
   }
 
@@ -811,6 +977,142 @@ ${extractedText.slice(0, 18000)}`;
     };
   }
 
+  private sanitizeParsedFromEditor(
+    candidate: unknown,
+    fallback: ResumeParsed,
+  ): ResumeParsed {
+    const root =
+      candidate && typeof candidate === 'object'
+        ? (candidate as Record<string, unknown>)
+        : {};
+
+    const parserRaw =
+      root.parser && typeof root.parser === 'object'
+        ? (root.parser as Record<string, unknown>)
+        : {};
+    const basicsRaw =
+      root.basics && typeof root.basics === 'object'
+        ? (root.basics as Record<string, unknown>)
+        : {};
+    const hasBasicsName = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'name',
+    );
+    const hasBasicsEmail = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'email',
+    );
+    const hasBasicsPhone = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'phone',
+    );
+    const hasBasicsLocation = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'location',
+    );
+    const hasBasicsLink = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'link',
+    );
+    const hasBasicsSummary = Object.prototype.hasOwnProperty.call(
+      basicsRaw,
+      'summary',
+    );
+
+    const experiences = Array.isArray(root.experiences)
+      ? root.experiences
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const exp = item as Record<string, unknown>;
+            const highlights = this.toStringArray(exp.highlights, 8, 280);
+            const summary = this.toStringOrUndefined(exp.summary, 500);
+            return {
+              company: this.toStringOrUndefined(exp.company, 120),
+              title: this.toStringOrUndefined(exp.title, 120),
+              start: this.toStringOrUndefined(exp.start, 40),
+              end: this.toStringOrUndefined(exp.end, 40),
+              summary,
+              highlights:
+                highlights.length > 0
+                  ? highlights
+                  : summary
+                    ? [summary]
+                    : [],
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => Boolean(item))
+          .slice(0, 8)
+      : [];
+
+    const education = Array.isArray(root.education)
+      ? root.education
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const edu = item as Record<string, unknown>;
+            return {
+              school: this.toStringOrUndefined(edu.school, 160),
+              degree: this.toStringOrUndefined(edu.degree, 160),
+              gpa: this.toStringOrUndefined(edu.gpa, 40),
+              date: this.toStringOrUndefined(edu.date, 80),
+              descriptions: this.toStringArray(edu.descriptions, 6, 260),
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => Boolean(item))
+          .slice(0, 6)
+      : [];
+    const aiAssessment = this.normalizeAiAssessment(root.aiAssessment);
+
+    return {
+      parser: {
+        provider:
+          this.toStringOrUndefined(parserRaw.provider, 60) ||
+          fallback.parser?.provider ||
+          'manual-editor',
+        model:
+          this.toStringOrUndefined(parserRaw.model, 80) ||
+          fallback.parser?.model,
+        mode: 'manual-edit',
+      },
+      basics: {
+        name:
+          hasBasicsName
+            ? this.toStringOrUndefined(basicsRaw.name, 80)
+            : fallback.basics.name,
+        email:
+          hasBasicsEmail
+            ? this.toStringOrUndefined(basicsRaw.email, 120)
+            : fallback.basics.email,
+        phone:
+          hasBasicsPhone
+            ? this.toStringOrUndefined(basicsRaw.phone, 60)
+            : fallback.basics.phone,
+        location:
+          hasBasicsLocation
+            ? this.toStringOrUndefined(basicsRaw.location, 120)
+            : fallback.basics.location,
+        link:
+          hasBasicsLink
+            ? this.toStringOrUndefined(basicsRaw.link, 240)
+            : fallback.basics.link,
+        summary:
+          hasBasicsSummary
+            ? this.toStringOrUndefined(basicsRaw.summary, 900)
+            : fallback.basics.summary,
+      },
+      skills:
+        Array.isArray(root.skills)
+          ? this.toStringArray(root.skills, 40, 80)
+          : fallback.skills,
+      experiences: Array.isArray(root.experiences)
+        ? experiences
+        : fallback.experiences,
+      education: Array.isArray(root.education)
+        ? education
+        : fallback.education || [],
+      aiAssessment: aiAssessment || fallback.aiAssessment,
+    };
+  }
+
   async uploadAndParse(fileBuffer: Buffer, userId: string): Promise<ResumeRecord> {
     if (!fileBuffer || fileBuffer.length === 0) {
       throw new BadRequestException('Uploaded file is empty.');
@@ -837,8 +1139,10 @@ ${extractedText.slice(0, 18000)}`;
         'ResumeService',
       );
     }
+    parsed.aiAssessment = await this.scoreResumeWithAi(parsed, userId);
 
-    return this.saveParsed(userId, parsed);
+    const latest = await this.getLatest(userId);
+    return this.saveParsed(userId, parsed, latest?.templateId);
   }
 
   async getLatest(userId: string): Promise<ResumeRecord | null> {
@@ -849,9 +1153,70 @@ ${extractedText.slice(0, 18000)}`;
     return this.memoryStore.get(userId) ?? null;
   }
 
-  async saveParsed(userId: string, parsed: ResumeParsed): Promise<ResumeRecord> {
+  async getById(userId: string, resumeId: string): Promise<ResumeRecord | null> {
+    if (!resumeId.trim()) return null;
     if (this.supabaseService.isConfigured()) {
-      const row = await this.supabaseService.insertResume(userId, parsed);
+      const row = await this.supabaseService.getResumeById(userId, resumeId);
+      return row ? this.mapRowToRecord(row) : null;
+    }
+    const history = this.memoryHistory.get(userId) ?? [];
+    const matched = history.find((item) => item.id === resumeId);
+    if (matched) return matched;
+    const latest = this.memoryStore.get(userId);
+    return latest?.id === resumeId ? latest : null;
+  }
+
+  async getHistory(userId: string, limit = 12): Promise<ResumeRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 50));
+    if (this.supabaseService.isConfigured()) {
+      const rows = await this.supabaseService.getResumeHistory(userId, safeLimit);
+      return rows.map((row) => this.mapRowToRecord(row));
+    }
+    const history = this.memoryHistory.get(userId) ?? [];
+    if (history.length > 0) {
+      return history.slice(0, safeLimit);
+    }
+    const latest = this.memoryStore.get(userId);
+    return latest ? [latest] : [];
+  }
+
+  async updateLatestFromEditor(
+    userId: string,
+    candidate: unknown,
+    templateId?: string,
+  ): Promise<ResumeRecord> {
+    const latest = await this.getLatest(userId);
+    if (!latest) {
+      throw new BadRequestException(
+        'No resume found for this user. Please upload resume first.',
+      );
+    }
+    const parsed = this.sanitizeParsedFromEditor(candidate, latest.parsed);
+    return this.saveParsed(userId, parsed, templateId ?? latest.templateId);
+  }
+
+  async saveParsed(
+    userId: string,
+    parsed: ResumeParsed,
+    templateId?: string,
+  ): Promise<ResumeRecord> {
+    let resolvedTemplateId = this.normalizeTemplateId(templateId);
+    if (resolvedTemplateId === undefined) {
+      const latest = await this.getLatest(userId);
+      resolvedTemplateId = this.normalizeTemplateId(latest?.templateId);
+    }
+
+    const subscription = await this.subscriptionService.getSubscription(userId);
+    if (!this.isSubscribedStatus(subscription.status)) {
+      resolvedTemplateId = FREE_TEMPLATE_ID;
+    }
+
+    if (this.supabaseService.isConfigured()) {
+      const row = await this.supabaseService.insertResume(
+        userId,
+        parsed,
+        resolvedTemplateId,
+      );
       if (!row) {
         throw new Error('Failed to persist resume');
       }
@@ -863,6 +1228,7 @@ ${extractedText.slice(0, 18000)}`;
       userId,
       parsed,
       createdAt: new Date().toISOString(),
+      templateId: resolvedTemplateId,
     };
     this.memoryStore.set(userId, localRecord);
     const history = this.memoryHistory.get(userId) ?? [];
@@ -880,6 +1246,7 @@ ${extractedText.slice(0, 18000)}`;
       const row = await this.supabaseService.insertResume(
         userId,
         history[1].parsed_json,
+        history[1].template_id ?? undefined,
       );
       return row ? this.mapRowToRecord(row) : null;
     }
@@ -894,10 +1261,62 @@ ${extractedText.slice(0, 18000)}`;
       userId,
       parsed: previous.parsed,
       createdAt: new Date().toISOString(),
+      templateId: previous.templateId,
     };
     this.memoryStore.set(userId, restored);
     history.unshift(restored);
     this.memoryHistory.set(userId, history.slice(0, 10));
     return restored;
+  }
+
+  async deleteHistoryResume(
+    userId: string,
+    resumeId: string,
+  ): Promise<{ deleted: boolean; latest: ResumeRecord | null }> {
+    if (!resumeId.trim()) {
+      throw new BadRequestException('Invalid resume id.');
+    }
+
+    if (this.supabaseService.isConfigured()) {
+      const deleted = await this.supabaseService.deleteResumeById(userId, resumeId);
+      if (!deleted) {
+        return {
+          deleted: false,
+          latest: await this.getLatest(userId),
+        };
+      }
+      return {
+        deleted: true,
+        latest: await this.getLatest(userId),
+      };
+    }
+
+    const history = this.memoryHistory.get(userId) ?? [];
+    const nextHistory = history.filter((item) => item.id !== resumeId);
+    const deleted = nextHistory.length !== history.length;
+
+    if (!deleted) {
+      return {
+        deleted: false,
+        latest: this.memoryStore.get(userId) ?? null,
+      };
+    }
+
+    this.memoryHistory.set(userId, nextHistory);
+
+    const current = this.memoryStore.get(userId);
+    if (current?.id === resumeId) {
+      const nextLatest = nextHistory[0] ?? null;
+      if (nextLatest) {
+        this.memoryStore.set(userId, nextLatest);
+      } else {
+        this.memoryStore.delete(userId);
+      }
+    }
+
+    return {
+      deleted: true,
+      latest: this.memoryStore.get(userId) ?? nextHistory[0] ?? null,
+    };
   }
 }

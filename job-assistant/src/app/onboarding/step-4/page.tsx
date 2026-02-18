@@ -114,24 +114,24 @@ export default function Step4Page() {
   };
 
   return (
-    <section className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white px-6 py-8 shadow-panel md:px-8">
+    <section className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white px-6 py-8 shadow-panel md:px-10 md:py-10 xl:px-12 xl:py-12">
       <span className="absolute right-8 top-8 animate-float-y text-4xl [animation-duration:1.9s] [will-change:transform]">💡</span>
       <span className="absolute bottom-8 right-20 animate-float-y text-5xl [animation-duration:2.4s] [will-change:transform]">😀</span>
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         <StatusBanner status={status} message={message} />
 
         <div className="space-y-2">
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">Step 4 of 4</p>
-          <h1 className="text-3xl font-extrabold text-slate-900 md:text-5xl">
+          <h1 className="text-[clamp(2rem,3.6vw,3.4rem)] font-extrabold leading-tight tracking-[-0.02em] text-slate-900">
             Choose the Type of Employment You&apos;re Looking For
           </h1>
-          <p className="max-w-3xl text-slate-500">
+          <p className="max-w-4xl text-base leading-relaxed text-slate-500 md:text-lg">
             Select one or multiple options. You can still change these in dashboard later.
           </p>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {EMPLOYMENT_OPTIONS.map((item) => {
             const active = selected.has(item.key);
             return (
@@ -139,7 +139,7 @@ export default function Step4Page() {
                 type="button"
                 key={item.key}
                 onClick={() => toggleType(item.key)}
-                className={`relative rounded-2xl border p-4 text-left transition duration-200 motion-reduce:transition-none ${
+                className={`relative rounded-2xl border p-4 text-left transition duration-200 motion-reduce:transition-none md:p-5 ${
                   active
                     ? "animate-pop-in border-blue-600 bg-blue-50 shadow"
                     : "border-slate-300 bg-white hover:-translate-y-0.5 hover:border-slate-400"

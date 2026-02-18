@@ -1,4 +1,4 @@
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class ImplementPlanDto {
   @IsString()
@@ -10,4 +10,10 @@ export class ImplementPlanDto {
   @MinLength(1)
   @MaxLength(120)
   planId!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  resumeId?: string;
 }

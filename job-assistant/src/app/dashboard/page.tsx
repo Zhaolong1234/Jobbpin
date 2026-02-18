@@ -21,8 +21,15 @@ import {
 } from "lucide-react";
 
 import { StatusBanner } from "@/components/status-banner";
+import { ResumeHistoryCards } from "@/components/resume-history-cards";
+import { GradualSpacing } from "@/components/ui/gradual-spacing";
 import { apiFetch } from "@/lib/api";
-import { DEV_USER_ID } from "@/lib/config";
+import {
+  DEV_USER_ID,
+  STRIPE_PRICE_ID_MONTHLY,
+  STRIPE_PRICE_ID_WEEKLY,
+  STRIPE_PRICE_ID_YEARLY,
+} from "@/lib/config";
 import { computeOnboardingSignals } from "@/lib/onboarding";
 import type { GlobalStatus } from "@/lib/status";
 import type {
@@ -35,9 +42,9 @@ const HAS_CLERK = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 const CHAT_HISTORY_LIMIT = 6;
 const CHAT_HISTORY_ITEM_MAX_CHARS = 1200;
 const CHAT_SUGGESTIONS = [
-  "帮我生成一版软件工程师求职计划",
-  "根据当前进度，我下一步最重要的动作是什么？",
-  "给我 5 个可以直接复制的投递跟进话术",
+  "Help me create a software engineer job-search plan.",
+  "Based on my current progress, what is the most important next step?",
+  "Give me 5 copy-ready follow-up messages for applications.",
 ];
 
 interface ChatMessage {
@@ -47,6 +54,11 @@ interface ChatMessage {
 
 interface ChatResponse {
   reply: string;
+}
+
+interface DeleteResumeResponse {
+  deleted: boolean;
+  latest: ResumeRecord | null;
 }
 
 type JourneyState = "done" | "current" | "locked";
@@ -88,12 +100,32 @@ function readinessCopy(score: number) {
   return "Foundation stage. Focus on profile and subscription first.";
 }
 
+function toSubscriptionPlanLabel(plan?: string) {
+  const raw = (plan || "").trim();
+  if (!raw || raw.toLowerCase() === "free") return "Explorer (Free)";
+  if (raw === STRIPE_PRICE_ID_WEEKLY || /week|weekly/i.test(raw)) {
+    return "Growth Plan (Weekly)";
+  }
+  if (raw === STRIPE_PRICE_ID_MONTHLY || /month|monthly/i.test(raw)) {
+    return "Growth Plan (Monthly)";
+  }
+  if (raw === STRIPE_PRICE_ID_YEARLY || /year|yearly|annual/i.test(raw)) {
+    return "Growth Plan (Yearly)";
+  }
+  if (/^price_/i.test(raw)) {
+    return "Growth Plan";
+  }
+  return raw;
+}
+
 export default function DashboardOverviewPage() {
   const { user, isLoaded } = useUser();
   const userId = user?.id ?? DEV_USER_ID;
 
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [resume, setResume] = useState<ResumeRecord | null>(null);
+  const [resumeHistory, setResumeHistory] = useState<ResumeRecord[]>([]);
+  const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
   const [status, setStatus] = useState<GlobalStatus>("loading");
   const [message, setMessage] = useState("Loading dashboard data...");
@@ -121,13 +153,21 @@ export default function DashboardOverviewPage() {
     setMessage("Loading dashboard data...");
 
     try {
-      const [profileData, onboarding] = await Promise.all([
+      const [profileData, onboarding, historyData] = await Promise.all([
         apiFetch<ProfileRecord>(`/profile/${userId}`),
         computeOnboardingSignals(userId),
+        apiFetch<ResumeRecord[]>(`/resume/${userId}/history?limit=6`).catch(() => []),
       ]);
+      const mergedHistory =
+        historyData.length > 0
+          ? historyData
+          : onboarding.resume
+            ? [onboarding.resume]
+            : [];
 
       setProfile(profileData);
       setResume(onboarding.resume);
+      setResumeHistory(mergedHistory);
       setSubscription(onboarding.subscription);
 
       const hasAnyData = Boolean(
@@ -140,6 +180,7 @@ export default function DashboardOverviewPage() {
       setStatus(hasAnyData ? "success" : "empty");
       setMessage(hasAnyData ? "Dashboard loaded." : "No data yet. Start your journey below.");
     } catch (error) {
+      setResumeHistory([]);
       setStatus("parse_failed");
       setMessage((error as Error).message || "Failed to load dashboard data.");
     }
@@ -239,6 +280,39 @@ export default function DashboardOverviewPage() {
     [chatInput, chatLoading],
   );
 
+  const deleteResumeFromHistory = useCallback(
+    async (target: ResumeRecord) => {
+      const ok = window.confirm("Delete this resume permanently? This will also remove it from database.");
+      if (!ok) return;
+
+      setDeletingResumeId(target.id);
+      try {
+        const data = await apiFetch<DeleteResumeResponse>(
+          `/resume/${userId}/history/${encodeURIComponent(target.id)}`,
+          { method: "DELETE" },
+        );
+        if (!data.deleted) {
+          setStatus("parse_failed");
+          setMessage("Resume not found or already deleted.");
+          return;
+        }
+
+        setResumeHistory((prev) => prev.filter((item) => item.id !== target.id));
+        if (resume?.id === target.id) {
+          setResume(data.latest);
+        }
+        setStatus("success");
+        setMessage("Resume deleted successfully.");
+      } catch (error) {
+        setStatus("parse_failed");
+        setMessage((error as Error).message || "Failed to delete resume.");
+      } finally {
+        setDeletingResumeId(null);
+      }
+    },
+    [resume?.id, userId],
+  );
+
   const sendChat = async () => {
     const text = chatInput.trim();
     if (!text) return;
@@ -294,7 +368,7 @@ export default function DashboardOverviewPage() {
     {
       label: "Subscription",
       value: signals.subscriptionActive ? "Active" : "Inactive",
-      hint: subscription?.plan ? `${subscription.plan} plan` : "Choose a plan",
+      hint: subscription?.plan ? toSubscriptionPlanLabel(subscription.plan) : "Choose a plan",
       tone: signals.subscriptionActive ? "text-emerald-600" : "text-amber-600",
       icon: Briefcase,
     },
@@ -336,9 +410,12 @@ export default function DashboardOverviewPage() {
             </div>
 
             <div>
-              <h1 className="text-[clamp(2rem,3.7vw,3.15rem)] font-bold leading-[1.08] text-slate-900">
-                Build a repeatable job search engine, not a one-off attempt.
-              </h1>
+              <GradualSpacing
+                text="Build a repeatable job search engine, not a one-off attempt."
+                duration={0.32}
+                delayMultiple={0.01}
+                className="text-[clamp(2rem,3.7vw,3.15rem)] font-bold leading-[1.08] text-slate-900"
+              />
               <p className="mt-3 max-w-3xl text-[15px] leading-relaxed text-slate-600 md:text-[17px]">
                 Track your execution from profile setup to resume optimization, subscription status,
                 and final application readiness in one operational dashboard.
@@ -496,6 +573,16 @@ export default function DashboardOverviewPage() {
                 );
               })}
             </div>
+
+            <ResumeHistoryCards
+              resumes={resumeHistory}
+              maxItems={3}
+              actionLabel="Open Workspace"
+              description="Pick a previously parsed resume and jump directly into the resume workspace."
+              getOpenHref={(item) => `/dashboard/resume?resumeId=${encodeURIComponent(item.id)}`}
+              onDelete={deleteResumeFromHistory}
+              deletingResumeId={deletingResumeId}
+            />
           </div>
         </section>
 

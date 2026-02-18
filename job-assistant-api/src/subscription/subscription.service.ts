@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 
 import {
@@ -15,6 +15,7 @@ interface StripeSubscriptionUpsertInput {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   currentPeriodEnd?: string;
+  cancelAtPeriodEnd?: boolean;
 }
 
 @Injectable()
@@ -63,6 +64,7 @@ export class SubscriptionService {
     stripe_customer_id?: string;
     stripe_subscription_id?: string;
     current_period_end?: string;
+    cancel_at_period_end?: boolean | null;
   }): SubscriptionRecord {
     return {
       userId: row.user_id,
@@ -71,6 +73,7 @@ export class SubscriptionService {
       stripeCustomerId: row.stripe_customer_id,
       stripeSubscriptionId: row.stripe_subscription_id,
       currentPeriodEnd: row.current_period_end,
+      cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
     };
   }
 
@@ -82,6 +85,7 @@ export class SubscriptionService {
       stripeCustomerId: undefined,
       stripeSubscriptionId: undefined,
       currentPeriodEnd: undefined,
+      cancelAtPeriodEnd: false,
     };
     this.memoryStore.set(record.userId, downgraded);
     if (this.supabaseService.isConfigured()) {
@@ -106,6 +110,7 @@ export class SubscriptionService {
       currentPeriodEnd: subscription.items.data[0]?.current_period_end
         ? new Date(subscription.items.data[0].current_period_end * 1000).toISOString()
         : record.currentPeriodEnd,
+      cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     };
   }
 
@@ -118,7 +123,8 @@ export class SubscriptionService {
       next.status !== prev.status ||
       next.stripeCustomerId !== prev.stripeCustomerId ||
       next.stripeSubscriptionId !== prev.stripeSubscriptionId ||
-      next.currentPeriodEnd !== prev.currentPeriodEnd;
+      next.currentPeriodEnd !== prev.currentPeriodEnd ||
+      next.cancelAtPeriodEnd !== prev.cancelAtPeriodEnd;
     if (!changed) return prev;
 
     this.memoryStore.set(prev.userId, next);
@@ -308,6 +314,7 @@ export class SubscriptionService {
       userId,
       plan: 'free',
       status: 'incomplete',
+      cancelAtPeriodEnd: false,
     };
   }
 
@@ -341,6 +348,7 @@ export class SubscriptionService {
       stripeCustomerId: input.stripeCustomerId,
       stripeSubscriptionId: input.stripeSubscriptionId,
       currentPeriodEnd: input.currentPeriodEnd,
+      cancelAtPeriodEnd: input.cancelAtPeriodEnd ?? false,
     };
     this.memoryStore.set(input.userId, nextRecord);
 
@@ -350,5 +358,45 @@ export class SubscriptionService {
 
     await this.supabaseService.upsertSubscription(nextRecord);
     return nextRecord;
+  }
+
+  async cancelAutoRenew(userId: string): Promise<SubscriptionRecord> {
+    const record = await this.getSubscription(userId);
+
+    if (!['trialing', 'active', 'past_due'].includes(record.status)) {
+      throw new BadRequestException(
+        'No renewable subscription found. Only trialing/active/past_due plans can disable auto-renew.',
+      );
+    }
+
+    if (record.cancelAtPeriodEnd) {
+      return record;
+    }
+
+    if (!record.stripeSubscriptionId) {
+      throw new BadRequestException(
+        'Unable to cancel auto-renew because Stripe subscription id is missing.',
+      );
+    }
+
+    const stripe = this.getStripeClient();
+    if (!stripe) {
+      throw new BadRequestException('Stripe is not configured.');
+    }
+
+    try {
+      const updated = await stripe.subscriptions.update(record.stripeSubscriptionId, {
+        cancel_at_period_end: true,
+      });
+      const nextRecord = this.toRecordFromStripeSubscription(record, updated);
+      return this.upsertIfChanged(record, nextRecord);
+    } catch (error) {
+      if (this.isStripeMissingResourceError(error)) {
+        return this.downgradeMissingStripeResource(record);
+      }
+      throw new BadRequestException(
+        `Failed to disable auto-renew: ${(error as Error).message}`,
+      );
+    }
   }
 }

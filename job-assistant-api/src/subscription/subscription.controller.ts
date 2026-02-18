@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Post } from '@nestjs/common';
 
 import { SubscriptionService } from './subscription.service';
 
@@ -13,6 +13,18 @@ export class SubscriptionController {
       plan: data.plan,
       status: data.status,
       currentPeriodEnd: data.currentPeriodEnd,
+      cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
+    };
+  }
+
+  @Post(':userId/cancel')
+  async cancelSubscription(@Param('userId') userId: string) {
+    const data = await this.subscriptionService.cancelAutoRenew(userId);
+    return {
+      plan: data.plan,
+      status: data.status,
+      currentPeriodEnd: data.currentPeriodEnd,
+      cancelAtPeriodEnd: data.cancelAtPeriodEnd ?? false,
     };
   }
 }

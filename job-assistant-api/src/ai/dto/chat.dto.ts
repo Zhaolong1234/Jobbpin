@@ -44,4 +44,10 @@ export class ChatDto {
   @MinLength(1)
   @MaxLength(120)
   planId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  resumeId?: string;
 }

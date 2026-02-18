@@ -120,20 +120,25 @@ export default function Step2Page() {
   };
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+    <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
       <div className="panel">
-        <div className="panel-body space-y-5">
+        <div className="panel-body space-y-6 md:p-7">
           <StatusBanner status={status} message={message} />
           <div className="space-y-2">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">Step 2 of 4</p>
-            <h1 className="text-3xl font-extrabold text-slate-900 md:text-4xl">Basic Profile Details</h1>
+            <h1 className="text-[clamp(1.95rem,3vw,3rem)] font-extrabold leading-tight tracking-[-0.02em] text-slate-900">
+              Basic Profile Details
+            </h1>
+            <p className="text-base leading-relaxed text-slate-500 md:text-lg">
+              Add your identity details so recommendations and resume output can be personalized.
+            </p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             <label className="label">
               First Name *
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 value={profile.firstName}
                 onChange={(e) => setProfile((prev) => ({ ...prev, firstName: e.target.value }))}
               />
@@ -141,7 +146,7 @@ export default function Step2Page() {
             <label className="label">
               Country <span className="text-slate-400">(optional)</span>
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 value={profile.country}
                 onChange={(e) => setProfile((prev) => ({ ...prev, country: e.target.value }))}
               />
@@ -149,7 +154,7 @@ export default function Step2Page() {
             <label className="label">
               Last Name *
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 value={profile.lastName}
                 onChange={(e) => setProfile((prev) => ({ ...prev, lastName: e.target.value }))}
               />
@@ -157,7 +162,7 @@ export default function Step2Page() {
             <label className="label">
               City <span className="text-slate-400">(optional)</span>
               <input
-                className="input mt-1"
+                className="input mt-1 text-base"
                 value={profile.city}
                 onChange={(e) => setProfile((prev) => ({ ...prev, city: e.target.value }))}
               />

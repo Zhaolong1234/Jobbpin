@@ -2,9 +2,12 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
+  Query,
+  Put,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -13,6 +16,7 @@ import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 
 import { UploadResumeDto } from './dto/upload-resume.dto';
+import { UpdateResumeDto } from './dto/update-resume.dto';
 import { ResumeService } from './resume.service';
 
 @Controller('resume')
@@ -70,5 +74,35 @@ export class ResumeController {
   @Get(':userId/latest')
   async getLatestResume(@Param('userId') userId: string) {
     return this.resumeService.getLatest(userId);
+  }
+
+  @Get(':userId/history')
+  async getResumeHistory(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedLimit = Number.parseInt(limit || '', 10);
+    const safeLimit = Number.isFinite(parsedLimit) ? parsedLimit : 12;
+    return this.resumeService.getHistory(userId, safeLimit);
+  }
+
+  @Put(':userId/latest')
+  async updateLatestResume(
+    @Param('userId') userId: string,
+    @Body() dto: UpdateResumeDto,
+  ) {
+    return this.resumeService.updateLatestFromEditor(
+      userId,
+      dto.parsed,
+      dto.templateId,
+    );
+  }
+
+  @Delete(':userId/history/:resumeId')
+  async deleteHistoryResume(
+    @Param('userId') userId: string,
+    @Param('resumeId') resumeId: string,
+  ) {
+    return this.resumeService.deleteHistoryResume(userId, resumeId);
   }
 }

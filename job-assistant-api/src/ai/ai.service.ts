@@ -19,6 +19,7 @@ import { RollbackResumeDto } from './dto/rollback-resume.dto';
 interface PendingSummaryPlan {
   planId: string;
   userId: string;
+  sourceResumeId?: string;
   createdAt: number;
   expiresAt: number;
   proposedSummary: string;
@@ -27,9 +28,22 @@ interface PendingSummaryPlan {
   beforeSummary: string;
 }
 
+interface FreeChatUsage {
+  day: string;
+  count: number;
+}
+
+export interface FreeChatQuotaInfo {
+  dailyLimit: number;
+  usedToday: number;
+  remainingToday: number;
+}
+
 @Injectable()
 export class AiService {
   private readonly pendingPlans = new Map<string, PendingSummaryPlan>();
+  private readonly freeChatUsageByUser = new Map<string, FreeChatUsage>();
+  private readonly freeDailyChatLimit = 5;
 
   constructor(
     private readonly resumeService: ResumeService,
@@ -269,8 +283,84 @@ export class AiService {
     ].join('\n');
   }
 
+  private isSubscribedStatus(status: string): boolean {
+    return ['trialing', 'active', 'past_due'].includes(status);
+  }
+
+  private consumeFreeChatQuota(
+    userId: string,
+    subscriptionStatus: string,
+  ): FreeChatQuotaInfo | null {
+    if (this.isSubscribedStatus(subscriptionStatus)) {
+      return null;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = this.freeChatUsageByUser.get(userId);
+    const usedToday = existing?.day === today ? existing.count : 0;
+
+    if (usedToday >= this.freeDailyChatLimit) {
+      throw new HttpException(
+        `Free plan limit reached: ${this.freeDailyChatLimit} AI chats per day. Please upgrade to continue.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const nextUsed = usedToday + 1;
+    this.freeChatUsageByUser.set(userId, {
+      day: today,
+      count: nextUsed,
+    });
+
+    return {
+      dailyLimit: this.freeDailyChatLimit,
+      usedToday: nextUsed,
+      remainingToday: this.freeDailyChatLimit - nextUsed,
+    };
+  }
+
+  private getFreeChatQuotaPreview(
+    userId: string,
+    subscriptionStatus: string,
+  ): FreeChatQuotaInfo | null {
+    if (this.isSubscribedStatus(subscriptionStatus)) {
+      return null;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = this.freeChatUsageByUser.get(userId);
+    const usedToday = existing?.day === today ? existing.count : 0;
+    return {
+      dailyLimit: this.freeDailyChatLimit,
+      usedToday,
+      remainingToday: Math.max(0, this.freeDailyChatLimit - usedToday),
+    };
+  }
+
+  private isLowSignalMessage(message: string): boolean {
+    const text = message.trim();
+    if (!text) return true;
+    const hasReadableContent = /[A-Za-z\u4e00-\u9fff]/.test(text);
+    return !hasReadableContent;
+  }
+
   private makePlanId(userId: string): string {
     return `plan_${userId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private async resolveResumeForContext(
+    userId: string,
+    resumeId?: string,
+  ): Promise<ResumeRecord | null> {
+    const targetResumeId = resumeId?.trim();
+    if (targetResumeId) {
+      const matched = await this.resumeService.getById(userId, targetResumeId);
+      if (matched) return matched;
+      this.logger.warn(
+        `Requested resumeId not found for AI context: user=${userId}, resumeId=${targetResumeId}. Falling back to latest.`,
+        'AiService',
+      );
+    }
+    return this.resumeService.getLatest(userId);
   }
 
   private buildFallbackPlan(
@@ -278,6 +368,7 @@ export class AiService {
     currentSummary: string,
     skills: string[],
     userId: string,
+    sourceResumeId?: string,
   ): PendingSummaryPlan {
     const topSkills = skills.slice(0, 5).join(', ');
     const proposedSummary = [
@@ -292,6 +383,7 @@ export class AiService {
     const plan: PendingSummaryPlan = {
       planId: this.makePlanId(userId),
       userId,
+      sourceResumeId,
       createdAt: Date.now(),
       expiresAt: Date.now() + 1000 * 60 * 20,
       proposedSummary,
@@ -357,12 +449,19 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
       const rationale = (parsed.rationale || '').trim();
 
       if (!proposedSummary) {
-        return this.buildFallbackPlan(dto.message, currentSummary, skills, dto.userId);
+        return this.buildFallbackPlan(
+          dto.message,
+          currentSummary,
+          skills,
+          dto.userId,
+          resume.id,
+        );
       }
 
       return {
         planId: this.makePlanId(dto.userId),
         userId: dto.userId,
+        sourceResumeId: resume.id,
         createdAt: Date.now(),
         expiresAt: Date.now() + 1000 * 60 * 20,
         proposedSummary: proposedSummary.slice(0, 850),
@@ -378,7 +477,13 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
         `Build summary plan fallback: ${(error as Error).message}`,
         'AiService',
       );
-      return this.buildFallbackPlan(dto.message, currentSummary, skills, dto.userId);
+      return this.buildFallbackPlan(
+        dto.message,
+        currentSummary,
+        skills,
+        dto.userId,
+        resume.id,
+      );
     }
   }
 
@@ -392,12 +497,17 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
       throw new BadRequestException('Plan expired. Please generate a new plan.');
     }
 
-    const latest = await this.resumeService.getLatest(dto.userId);
-    if (!latest) {
+    const sourceResumeId = dto.resumeId?.trim() || plan.sourceResumeId;
+    const sourceResume = sourceResumeId
+      ? await this.resumeService.getById(dto.userId, sourceResumeId)
+      : await this.resumeService.getLatest(dto.userId);
+    if (!sourceResume) {
       throw new BadRequestException('No resume found for this user. Please upload resume first.');
     }
 
-    const nextParsed = JSON.parse(JSON.stringify(latest.parsed)) as ResumeRecord['parsed'];
+    const nextParsed = JSON.parse(
+      JSON.stringify(sourceResume.parsed),
+    ) as ResumeRecord['parsed'];
     if (!nextParsed.basics) {
       nextParsed.basics = {};
     }
@@ -408,7 +518,11 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
       mode: 'chat-edit-summary',
     };
 
-    const saved = await this.resumeService.saveParsed(dto.userId, nextParsed);
+    const saved = await this.resumeService.saveParsed(
+      dto.userId,
+      nextParsed,
+      sourceResume.templateId,
+    );
     this.pendingPlans.delete(dto.planId);
 
     return {
@@ -437,9 +551,10 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
 
   async chat(dto: ChatDto) {
     const [resume, subscription] = await Promise.all([
-      this.resumeService.getLatest(dto.userId),
+      this.resolveResumeForContext(dto.userId, dto.resumeId),
       this.subscriptionService.getSubscription(dto.userId),
     ]);
+    const quotaPreview = this.getFreeChatQuotaPreview(dto.userId, subscription.status);
 
     if (this.isSubscriptionQuestion(dto.message)) {
       return {
@@ -448,8 +563,19 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
           status: subscription.status,
           currentPeriodEnd: subscription.currentPeriodEnd,
         }),
+        usage: quotaPreview,
       };
     }
+
+    if (this.isLowSignalMessage(dto.message)) {
+      return {
+        reply:
+          '我收到了你的消息。请告诉我更具体的目标，例如：\n1) 给当前简历打分\n2) 优化 Summary\n3) 按目标岗位 JD 改写要点',
+        usage: quotaPreview,
+      };
+    }
+
+    const quotaInfo = this.consumeFreeChatQuota(dto.userId, subscription.status);
 
     const refineExistingPlan = Boolean(dto.planId && this.pendingPlans.has(dto.planId));
     if (resume && (this.isSummaryModificationRequest(dto.message) || refineExistingPlan)) {
@@ -471,6 +597,7 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
         improvements: plan.improvements,
         explanation: plan.rationale,
         options: ['implement_the_plan', 'talk_more'],
+        usage: quotaInfo,
       };
     }
 
@@ -478,6 +605,7 @@ Target role: ${resume.parsed.experiences?.[0]?.title || '-'}
       return {
         reply:
           '当前“计划-实施”流程只支持 Summary/Introduction 改写。像电话、邮箱、姓名这类字段，请直接告诉我目标值，我会先给你文本建议；后续我可以再帮你加成可直接落库的字段编辑。',
+        usage: quotaInfo,
       };
     }
 
@@ -515,7 +643,7 @@ ${dto.message}`;
         ],
         'DMX chat request',
       );
-      return { reply };
+      return { reply, usage: quotaInfo };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;

@@ -14,6 +14,7 @@ interface ResumeRow {
   user_id: string;
   parsed_json: ResumeParsed;
   created_at: string;
+  template_id?: string | null;
 }
 
 interface SubscriptionRow {
@@ -23,6 +24,7 @@ interface SubscriptionRow {
   stripe_customer_id?: string;
   stripe_subscription_id?: string;
   current_period_end?: string;
+  cancel_at_period_end?: boolean | null;
 }
 
 interface ProfileRow {
@@ -133,40 +135,124 @@ export class SupabaseService {
     return (await res.json()) as T;
   }
 
-  async insertResume(userId: string, parsed: ResumeParsed) {
+  async insertResume(
+    userId: string,
+    parsed: ResumeParsed,
+    templateId?: string,
+  ) {
     const payload = [
       {
         user_id: userId,
         parsed_json: parsed,
+        template_id: templateId ?? null,
       },
     ];
-    const rows = await this.request<ResumeRow[]>(
-      '/rest/v1/resumes?select=id,user_id,parsed_json,created_at',
-      {
-        method: 'POST',
-        headers: {
-          Prefer: 'return=representation',
+    try {
+      const rows = await this.request<ResumeRow[]>(
+        '/rest/v1/resumes?select=id,user_id,parsed_json,created_at,template_id',
+        {
+          method: 'POST',
+          headers: {
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      },
-    );
-    return rows[0] ?? null;
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'resumes', 'template_id')) {
+        throw error;
+      }
+      this.logger.warn(
+        'resumes.template_id is missing. Falling back to legacy resume insert.',
+        'SupabaseService',
+      );
+      const legacyRows = await this.request<ResumeRow[]>(
+        '/rest/v1/resumes?select=id,user_id,parsed_json,created_at',
+        {
+          method: 'POST',
+          headers: {
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify([
+            {
+              user_id: userId,
+              parsed_json: parsed,
+            },
+          ]),
+        },
+      );
+      return legacyRows[0] ?? null;
+    }
   }
 
   async getLatestResume(userId: string) {
     const queryUserId = encodeURIComponent(userId);
-    const rows = await this.request<ResumeRow[]>(
-      `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=1&select=id,user_id,parsed_json,created_at`,
-    );
-    return rows[0] ?? null;
+    try {
+      const rows = await this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=1&select=id,user_id,parsed_json,created_at,template_id`,
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'resumes', 'template_id')) {
+        throw error;
+      }
+      const rows = await this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=1&select=id,user_id,parsed_json,created_at`,
+      );
+      return rows[0] ?? null;
+    }
+  }
+
+  async getResumeById(userId: string, resumeId: string) {
+    const queryUserId = encodeURIComponent(userId);
+    const queryResumeId = encodeURIComponent(resumeId);
+    try {
+      const rows = await this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&id=eq.${queryResumeId}&limit=1&select=id,user_id,parsed_json,created_at,template_id`,
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'resumes', 'template_id')) {
+        throw error;
+      }
+      const rows = await this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&id=eq.${queryResumeId}&limit=1&select=id,user_id,parsed_json,created_at`,
+      );
+      return rows[0] ?? null;
+    }
   }
 
   async getResumeHistory(userId: string, limit = 2) {
     const queryUserId = encodeURIComponent(userId);
     const safeLimit = Math.max(1, Math.min(limit, 20));
-    return this.request<ResumeRow[]>(
-      `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=${safeLimit}&select=id,user_id,parsed_json,created_at`,
+    try {
+      return await this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=${safeLimit}&select=id,user_id,parsed_json,created_at,template_id`,
+      );
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'resumes', 'template_id')) {
+        throw error;
+      }
+      return this.request<ResumeRow[]>(
+        `/rest/v1/resumes?user_id=eq.${queryUserId}&order=created_at.desc&limit=${safeLimit}&select=id,user_id,parsed_json,created_at`,
+      );
+    }
+  }
+
+  async deleteResumeById(userId: string, resumeId: string): Promise<boolean> {
+    const queryUserId = encodeURIComponent(userId);
+    const queryResumeId = encodeURIComponent(resumeId);
+    const rows = await this.request<Array<{ id: string }>>(
+      `/rest/v1/resumes?id=eq.${queryResumeId}&user_id=eq.${queryUserId}&select=id`,
+      {
+        method: 'DELETE',
+        headers: {
+          Prefer: 'return=representation',
+        },
+      },
     );
+    return rows.length > 0;
   }
 
   async upsertSubscription(record: SubscriptionRecord) {
@@ -178,35 +264,87 @@ export class SupabaseService {
         stripe_customer_id: record.stripeCustomerId,
         stripe_subscription_id: record.stripeSubscriptionId,
         current_period_end: record.currentPeriodEnd ?? null,
+        cancel_at_period_end: record.cancelAtPeriodEnd ?? false,
       },
     ];
-    const rows = await this.request<SubscriptionRow[]>(
-      '/rest/v1/subscriptions?on_conflict=user_id&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end',
-      {
-        method: 'POST',
-        headers: {
-          Prefer: 'resolution=merge-duplicates,return=representation',
+    try {
+      const rows = await this.request<SubscriptionRow[]>(
+        '/rest/v1/subscriptions?on_conflict=user_id&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end,cancel_at_period_end',
+        {
+          method: 'POST',
+          headers: {
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      },
-    );
-    return rows[0] ?? null;
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'subscriptions', 'cancel_at_period_end')) {
+        throw error;
+      }
+      this.logger.warn(
+        'subscriptions.cancel_at_period_end is missing. Falling back to legacy subscription upsert.',
+        'SupabaseService',
+      );
+      const legacyPayload = [
+        {
+          user_id: record.userId,
+          plan: record.plan,
+          status: record.status,
+          stripe_customer_id: record.stripeCustomerId,
+          stripe_subscription_id: record.stripeSubscriptionId,
+          current_period_end: record.currentPeriodEnd ?? null,
+        },
+      ];
+      const legacyRows = await this.request<SubscriptionRow[]>(
+        '/rest/v1/subscriptions?on_conflict=user_id&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end',
+        {
+          method: 'POST',
+          headers: {
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify(legacyPayload),
+        },
+      );
+      return legacyRows[0] ?? null;
+    }
   }
 
   async getSubscriptionByUserId(userId: string) {
     const queryUserId = encodeURIComponent(userId);
-    const rows = await this.request<SubscriptionRow[]>(
-      `/rest/v1/subscriptions?user_id=eq.${queryUserId}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end`,
-    );
-    return rows[0] ?? null;
+    try {
+      const rows = await this.request<SubscriptionRow[]>(
+        `/rest/v1/subscriptions?user_id=eq.${queryUserId}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end,cancel_at_period_end`,
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'subscriptions', 'cancel_at_period_end')) {
+        throw error;
+      }
+      const rows = await this.request<SubscriptionRow[]>(
+        `/rest/v1/subscriptions?user_id=eq.${queryUserId}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end`,
+      );
+      return rows[0] ?? null;
+    }
   }
 
   async getSubscriptionByCustomerId(customerId: string) {
     const encodedCustomer = encodeURIComponent(customerId);
-    const rows = await this.request<SubscriptionRow[]>(
-      `/rest/v1/subscriptions?stripe_customer_id=eq.${encodedCustomer}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end`,
-    );
-    return rows[0] ?? null;
+    try {
+      const rows = await this.request<SubscriptionRow[]>(
+        `/rest/v1/subscriptions?stripe_customer_id=eq.${encodedCustomer}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end,cancel_at_period_end`,
+      );
+      return rows[0] ?? null;
+    } catch (error) {
+      if (!this.isMissingColumnError(error, 'subscriptions', 'cancel_at_period_end')) {
+        throw error;
+      }
+      const rows = await this.request<SubscriptionRow[]>(
+        `/rest/v1/subscriptions?stripe_customer_id=eq.${encodedCustomer}&limit=1&select=user_id,plan,status,stripe_customer_id,stripe_subscription_id,current_period_end`,
+      );
+      return rows[0] ?? null;
+    }
   }
 
   async getProfileByUserId(userId: string) {

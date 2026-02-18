@@ -102,6 +102,7 @@ export class BillingService {
       stripeCustomerId: customerId,
       stripeSubscriptionId: undefined,
       currentPeriodEnd: undefined,
+      cancelAtPeriodEnd: false,
     });
 
     const session = await stripe.checkout.sessions.create({
@@ -181,6 +182,7 @@ export class BillingService {
       currentPeriodEnd: currentPeriodEndUnix
         ? new Date(currentPeriodEndUnix * 1000).toISOString()
         : undefined,
+      cancelAtPeriodEnd: Boolean(stripeSubscription.cancel_at_period_end),
     });
   }
 
