@@ -17,5 +17,14 @@ Create `job-assistant/.env.local` with:
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+
+# Optional legacy fallback
 NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx
+
+NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY=price_xxx_weekly
+NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY=price_xxx_monthly
+NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY=price_xxx_yearly
+
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
+CLERK_SECRET_KEY=sk_test_xxx
 ```

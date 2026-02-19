@@ -31,10 +31,14 @@ Full-stack MVP for:
 
 ### 3.1 Frontend (`job-assistant/.env.local`)
 
+Create `job-assistant/.env.local`:
+
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 
-NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx                # legacy fallback
+# Optional legacy fallback
+NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx
+
 NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY=price_xxx_weekly
 NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY=price_xxx_monthly
 NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY=price_xxx_yearly
@@ -43,7 +47,9 @@ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
 CLERK_SECRET_KEY=sk_test_xxx
 ```
 
-### 3.2 Backend (`job-assistant-api/.env`)
+### 3.2 Backend (`job-assistant-api/.env.local`)
+
+Create `job-assistant-api/.env.local`:
 
 ```bash
 PORT=4000
@@ -55,12 +61,25 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
 STRIPE_WEEKLY_PRICE_ID=price_xxx_weekly
+STRIPE_MONTHLY_PRICE_ID=price_xxx_monthly
+STRIPE_YEARLY_PRICE_ID=price_xxx_yearly
 
-GEMINI_API_KEY=AIzaSy_xxx
-GEMINI_MODEL=gemini-2.5-flash
+DMXAPI_API_KEY=sk_xxx
+DMXAPI_RESPONSES_URL=https://www.dmxapi.cn/v1/responses
+DMXAPI_PARSE_MODEL=hehe-tywd
+DMXAPI_CHAT_URL=https://www.dmxapi.cn/v1/chat/completions
+DMXAPI_CHAT_MODEL=gpt-5-mini
 
-# optional: future backend JWT verification
+# Optional: future backend JWT verification
 CLERK_SECRET_KEY=sk_test_xxx
+```
+
+Important:
+- Current backend scripts read process env at runtime. Keep `.env.local` as your local source of truth.
+- For local `npm run start:dev`, mirror it into `.env`:
+
+```bash
+cp job-assistant-api/.env.local job-assistant-api/.env
 ```
 
 ## 4. Database Setup (Supabase)
@@ -187,7 +206,13 @@ Required env:
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_WEEKLY_PRICE_ID`
-- `GEMINI_API_KEY` (if AI chat enabled)
+- `STRIPE_MONTHLY_PRICE_ID`
+- `STRIPE_YEARLY_PRICE_ID`
+- `DMXAPI_API_KEY`
+- `DMXAPI_RESPONSES_URL`
+- `DMXAPI_PARSE_MODEL`
+- `DMXAPI_CHAT_URL`
+- `DMXAPI_CHAT_MODEL`
 
 ## 9. API Summary
 

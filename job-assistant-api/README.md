@@ -25,23 +25,36 @@ npm run build
 
 ## 2. Environment
 
-Create `.env` from `.env.example`.
+Create `job-assistant-api/.env.local`:
 
-Required for core features:
-- `PORT`
-- `FRONTEND_URL`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_WEEKLY_PRICE_ID`
-- `STRIPE_MONTHLY_PRICE_ID`
-- `STRIPE_YEARLY_PRICE_ID`
+```bash
+PORT=4000
+FRONTEND_URL=http://localhost:3000
 
-Optional:
-- `DMXAPI_API_KEY`, `DMXAPI_RESPONSES_URL`, `DMXAPI_PARSE_MODEL` (resume parsing via DMX API)
-- `DMXAPI_CHAT_URL`, `DMXAPI_CHAT_MODEL` (AI chat via DMX API)
-- `CLERK_SECRET_KEY` (future backend JWT verification phase)
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+STRIPE_WEEKLY_PRICE_ID=price_xxx_weekly
+STRIPE_MONTHLY_PRICE_ID=price_xxx_monthly
+STRIPE_YEARLY_PRICE_ID=price_xxx_yearly
+
+DMXAPI_API_KEY=sk_xxx
+DMXAPI_RESPONSES_URL=https://www.dmxapi.cn/v1/responses
+DMXAPI_PARSE_MODEL=hehe-tywd
+DMXAPI_CHAT_URL=https://www.dmxapi.cn/v1/chat/completions
+DMXAPI_CHAT_MODEL=gpt-5-mini
+
+# Optional: future backend JWT verification
+CLERK_SECRET_KEY=sk_test_xxx
+```
+
+For local `npm run start:dev`, mirror it into `.env`:
+
+```bash
+cp .env.local .env
+```
 
 ## 3. Database Schema
 
