@@ -31,52 +31,60 @@ Full-stack MVP for:
 
 ### 3.1 Frontend (`job-assistant/.env.local`)
 
-Create `job-assistant/.env.local`:
+Current frontend runtime config:
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 
-# Optional legacy fallback
-NEXT_PUBLIC_STRIPE_PRICE_ID=price_xxx
+# Stripe product mapping currently used by this repo
+NEXT_PUBLIC_STRIPE_PRICE_ID=price_1T0LYGRfV8PKE3SoYxwUpPKA
+NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY=price_1T0gscRfV8PKE3SoLMx0hTEz
+NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY=price_1T0LYGRfV8PKE3SoYxwUpPKA
+NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY=price_1T0Lb4RfV8PKE3So7S5VYaAV
 
-NEXT_PUBLIC_STRIPE_PRICE_ID_WEEKLY=price_xxx_weekly
-NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY=price_xxx_monthly
-NEXT_PUBLIC_STRIPE_PRICE_ID_YEARLY=price_xxx_yearly
+# Public auth/payment keys
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=<from local env>
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<from local env>
 
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
-CLERK_SECRET_KEY=sk_test_xxx
+# Server-side frontend secret
+CLERK_SECRET_KEY=<from local env>
 ```
 
-### 3.2 Backend (`job-assistant-api/.env.local`)
+### 3.2 Backend (`job-assistant-api/.env.local` and `.env`)
 
-Create `job-assistant-api/.env.local`:
+Current backend runtime config (use the same values in both `.env.local` and `.env`):
 
 ```bash
 PORT=4000
 FRONTEND_URL=http://localhost:3000
 
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+SUPABASE_URL=https://bncrbwmulrfswcvpxvqq.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<from local env>
 
-STRIPE_SECRET_KEY=sk_test_xxx
-STRIPE_WEBHOOK_SECRET=whsec_xxx
-STRIPE_WEEKLY_PRICE_ID=price_xxx_weekly
-STRIPE_MONTHLY_PRICE_ID=price_xxx_monthly
-STRIPE_YEARLY_PRICE_ID=price_xxx_yearly
+STRIPE_SECRET_KEY=<from local env>
+STRIPE_WEBHOOK_SECRET=<from local env>
+STRIPE_WEEKLY_PRICE_ID=price_1T0gscRfV8PKE3SoLMx0hTEz
+STRIPE_MONTHLY_PRICE_ID=price_1T0LYGRfV8PKE3SoYxwUpPKA
+STRIPE_YEARLY_PRICE_ID=price_1T0Lb4RfV8PKE3So7S5VYaAV
 
-DMXAPI_API_KEY=sk_xxx
+# Optional provider keys in local backend env
+OPENAI_API_KEY=<from local env>
+OPENAI_MODEL=gpt-4.1-mini
+GEMINI_API_KEY=<from local env>
+GEMINI_MODEL=gemini-2.5-flash
+DMXAPI_API_KEY=<from local env>
 DMXAPI_RESPONSES_URL=https://www.dmxapi.cn/v1/responses
 DMXAPI_PARSE_MODEL=hehe-tywd
 DMXAPI_CHAT_URL=https://www.dmxapi.cn/v1/chat/completions
 DMXAPI_CHAT_MODEL=gpt-5-mini
 
-# Optional: future backend JWT verification
-CLERK_SECRET_KEY=sk_test_xxx
+# Optional (future backend JWT verification)
+CLERK_SECRET_KEY=<from local env>
 ```
 
 Important:
-- Current backend scripts read process env at runtime. Keep `.env.local` as your local source of truth.
-- For local `npm run start:dev`, mirror it into `.env`:
+- This repository enforces GitHub secret scanning. Real secret values stay in local `.env` files.
+- For local `npm run start:dev`, mirror `.env.local` into `.env`:
 
 ```bash
 cp job-assistant-api/.env.local job-assistant-api/.env
@@ -216,33 +224,120 @@ Required env:
 
 ## 9. API Summary
 
+Health:
 - `GET /health`
-- `POST /resume/upload`
-- `GET /resume/:userId/latest`
-- `POST /billing/checkout-session`
-- `POST /billing/webhook`
-- `GET /subscription/:userId`
+
+Profile:
 - `GET /profile/:userId`
 - `POST /profile`
+
+Onboarding:
 - `GET /onboarding/:userId`
 - `POST /onboarding/initialize`
 - `POST /onboarding/sync`
 - `POST /onboarding/step`
+
+Resume:
+- `POST /resume/upload`
+- `GET /resume/:userId/latest`
+- `GET /resume/:userId/history?limit=12`
+- `PUT /resume/:userId/latest`
+- `DELETE /resume/:userId/history/:resumeId`
+
+Billing / Stripe:
+- `POST /billing/checkout-session`
+- `POST /billing/webhook`
+- `GET /subscription/:userId`
+- `POST /subscription/:userId/cancel`
+
+AI:
 - `POST /ai/chat`
+- `POST /ai/implement-plan`
+- `POST /ai/rollback-resume`
 
 ## 10. Troubleshooting
 
-1. `column ... does not exist`
-- Re-run `job-assistant-api/sql/init.sql` (schema is outdated).
+1. `column ... does not exist` / DB mismatch:
+- Re-run `job-assistant-api/sql/init.sql`.
 
-2. `Could not find table 'public.onboarding_states' in schema cache`
-- Ensure SQL script has been executed in the same Supabase project used by backend env.
+2. `Could not find table 'public.onboarding_states'`:
+- Ensure backend points to the same Supabase project where SQL init was run.
 
-3. Stripe success but subscription not updated
-- Check webhook URL, enabled events, and `STRIPE_WEBHOOK_SECRET`.
+3. Stripe checkout success but subscription not synced:
+- Verify webhook URL and `STRIPE_WEBHOOK_SECRET`.
+- Ensure enabled events:
+  - `checkout.session.completed`
+  - `customer.subscription.updated`
+  - `customer.subscription.deleted`
 
-4. AI chat returns quota/billing errors
-- Check `GEMINI_API_KEY` validity and provider usage limits.
+4. Plan label shows raw `price_...` string:
+- Ensure frontend `NEXT_PUBLIC_STRIPE_PRICE_ID_*` matches backend Stripe price IDs exactly.
 
-5. CORS errors
-- Ensure backend `FRONTEND_URL` exactly matches frontend origin.
+5. Resume parse fails:
+- Check `DMXAPI_API_KEY`.
+- DMX unavailable will fall back to `pdf-parse` (lower structure quality).
+- Use selectable-text PDFs (avoid image-only scans).
+
+6. AI chat no response / quota errors:
+- Verify DMX account quota and model permissions.
+- Check `POST /ai/chat` payload and returned `reply`.
+
+7. CORS / Clerk session issues:
+- Ensure `FRONTEND_URL` matches frontend origin.
+- Ensure Clerk publishable/secret keys are from the same Clerk app.
+
+## 11. External Integrations and API Links
+
+Clerk:
+- Dashboard: https://dashboard.clerk.com/
+- Docs: https://clerk.com/docs
+
+Stripe:
+- Dashboard (test mode): https://dashboard.stripe.com/test/dashboard
+- API docs: https://docs.stripe.com/api
+- Webhooks docs: https://docs.stripe.com/webhooks
+
+Supabase:
+- Dashboard: https://supabase.com/dashboard
+- Docs: https://supabase.com/docs
+- Current project URL: `https://bncrbwmulrfswcvpxvqq.supabase.co`
+
+DMX API:
+- Parse endpoint: `https://www.dmxapi.cn/v1/responses`
+- Chat endpoint: `https://www.dmxapi.cn/v1/chat/completions`
+
+## 12. Resume Parse + AI Data Analysis Flow
+
+1. PDF upload:
+- Frontend uploads to `POST /resume/upload`.
+
+2. Resume structuring:
+- DMX parse extracts and structures `basics / skills / experiences / education`.
+- Fallback path uses local `pdf-parse` + rules if DMX is unavailable.
+
+3. AI scoring:
+- Backend produces `aiAssessment`:
+  - score `0-100`
+  - why-this-score summary
+  - strengths
+  - actionable improvements
+- Primary model path: DMX chat model.
+- Fallback path: heuristic scoring by section completeness.
+
+4. Versioned persistence:
+- Parsed result stored in Supabase `resumes`.
+- History loaded by `GET /resume/:userId/history`.
+- Editor updates saved by `PUT /resume/:userId/latest`.
+
+5. AI revision loop:
+- `POST /ai/chat` creates suggestions/plans.
+- `POST /ai/implement-plan` applies rewrite plan.
+- `POST /ai/rollback-resume` restores previous version.
+
+## 13. Big-Bug Checklist (Critical Paths)
+
+- Stripe webhook/event misconfiguration causes stale subscription status.
+- Frontend/backed price-id mismatch shows wrong plan labels.
+- Image-only PDFs reduce parse quality and downstream scoring quality.
+- Provider quota/key issues break AI chat/parse behavior.
+- Clerk key/environment mismatch causes auth/session instability.
